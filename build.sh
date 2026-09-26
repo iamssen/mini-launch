@@ -13,7 +13,7 @@ fi
 rm -rf build
 mkdir -p build/composer
 export CLANG_MODULE_CACHE_PATH="$PWD/build/module-cache"
-xcrun clang -fobjc-arc -O2 -Wall -Wextra -Werror -mmacosx-version-min=13.0   src/*.m src/GestureRecognizer.c -framework Cocoa -framework ApplicationServices   -framework QuartzCore -o build/MiniLaunch
+xcrun clang -fobjc-arc -O2 -Wall -Wextra -Werror -mmacosx-version-min=13.0   src/*.m src/GestureRecognizer.c -framework Cocoa -framework ApplicationServices   -framework QuartzCore -framework CoreImage -o build/MiniLaunch
 if ! xcrun --find actool >/dev/null 2>&1; then
   echo "Icon Composer 아이콘 빌드에는 Xcode 26 이상의 actool이 필요합니다." >&2
   exit 1

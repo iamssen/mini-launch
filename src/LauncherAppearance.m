@@ -14,7 +14,7 @@
         NSGlassEffectView *glass = [[NSGlassEffectView alloc] initWithFrame:self.bounds];
         // Clear의 투명감을 유지하면서 검정 틴트로 밝기를 낮춥니다.
         glass.style = NSGlassEffectViewStyleClear;
-        glass.tintColor = [NSColor colorWithWhite:0 alpha:0.30];
+        glass.tintColor = [NSColor colorWithWhite:0 alpha:0.50];
         glass.cornerRadius = 26;
         glass.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
         _content = [[NSView alloc] initWithFrame:self.bounds];

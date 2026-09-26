@@ -22,7 +22,7 @@ Xcode 26 이상의 CLI 빌드 도구와 ./build.sh만으로 dist/MiniLaunch.app�
 - 사용자 폴더를 생성하거나 원본 앱, alias, Dock 설정을 변경하지 않습니다.
 
 ## 화면과 입력
-- AppKit NSPanel과 macOS 26 이상의 NSGlassEffectView(Clear, 검정 30% 틴트)로 유리 재질의 Grid를 표시합니다. 이전 버전은 NSVisualEffectView를 사용합니다.
+- AppKit NSPanel과 macOS 26 이상의 NSGlassEffectView(Clear, 검정 50% 틴트)로 유리 재질의 Grid를 표시합니다. 이전 버전은 NSVisualEffectView를 사용합니다.
 - 첫 실행과 다섯 손가락 모으기는 포인터가 있는 화면 중앙에 표시합니다.
 - Dock 재열기는 Accessibility API로 자기 앱의 Dock 위치를 찾습니다.
 - 접근성 권한이 없으면 하단 Dock 영역의 클릭 위치를 보조 기준으로 사용합니다. 위치를 확인할 수 없으면 화면 중앙에 배치합니다.
@@ -33,7 +33,9 @@ Xcode 26 이상의 CLI 빌드 도구와 ./build.sh만으로 dist/MiniLaunch.app�
 - 첫 표시에는 선택 강조를 하지 않으며 방향키 사용 시 선택을 표시합니다.
 - 반투명 효과에 직접 외곽 마스크를 적용하며 하단 Dock 배치에는 말풍선 꼬리를 표시합니다. 좌우 꼬리는 지원하지 않습니다.
 - 창이 닫혀도 제스처 감지를 위해 프로세스가 유지됩니다. ⌘Q로 종료합니다.
-- 창 표시 애니메이션 없이 바로 표시합니다.
+- 등장은 140ms 확대·페이드, 퇴장은 90ms 축소·페이드를 사용합니다. Dock 위치가 있으면 해당 방향을 기준으로 합니다.
+- 전환 중 콘텐츠에만 Gaussian blur를 적용합니다(등장 5→0, 퇴장 현재값→6). 평상시에는 필터를 제거합니다.
+- 동작 줄이기 설정에서는 확대·블러 없이 짧은 페이드만 적용합니다.
 
 ## 제스처 구현 경계
 - GestureMonitor.m만 비공개 MultitouchSupport ABI를 사용합니다.

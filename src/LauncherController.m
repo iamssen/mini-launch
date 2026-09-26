@@ -2,6 +2,8 @@
 #import "AppCatalog.h"
 #import "DockLocator.h"
 #import "LauncherAppearance.h"
+#import <QuartzCore/QuartzCore.h>
+#import <CoreImage/CoreImage.h>
 
 static const CGFloat CellWidth = 128;
 static const CGFloat CellHeight = 128;
@@ -40,6 +42,8 @@ static const CGFloat GroupGap = 20;
 @property NSRect dockIcon;
 @property BOOL dockPresentation;
 @property BOOL bottomDock;
+@property BOOL hiding;
+@property NSUInteger transitionGeneration;
 @property id keyMonitor;
 @property id clickMonitor;
 @end
@@ -101,8 +105,19 @@ static const CGFloat GroupGap = 20;
     }];
     return self;
 }
-- (BOOL)visible { return self.panel.isVisible; }
+- (BOOL)visible { return self.panel.isVisible && !self.hiding; }
 - (void)showFromDock:(BOOL)fromDock {
+    BOOL alreadyVisible = self.visible;
+    self.transitionGeneration++;
+    self.hiding = NO;
+    [self.backdrop.layer removeAnimationForKey:@"launcherTransition"];
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    [self.backdrop.effect.layer removeAnimationForKey:@"launcherBlur"];
+    self.backdrop.effect.layer.filters = nil;
+    self.backdrop.layer.opacity = 1;
+    self.backdrop.layer.transform = CATransform3DIdentity;
+    [CATransaction commit];
     self.dockPresentation = fromDock;
     self.dockIcon = fromDock ? DockLocator.iconRect : NSZeroRect;
     NSPoint mouse = NSEvent.mouseLocation;
@@ -128,6 +143,7 @@ static const CGFloat GroupGap = 20;
     [self.panel makeKeyAndOrderFront:nil];
     [self.panel makeFirstResponder:self.panel];
     [self.panel invalidateShadow];
+    if (!alreadyVisible) [self animateEntrance];
 }
 - (CGFloat)gridHeight {
     CGFloat height = 0;
@@ -168,7 +184,121 @@ static const CGFloat GroupGap = 20;
     self.scroll.frame = NSMakeRect(SideInset, bottom + 10, width - SideInset * 2, height - topInset - 10 - bottom);
     self.statusLabel.frame = NSMakeRect(24, bottom + 2, width - 48, 16);
 }
-- (void)hide { [self.panel orderOut:nil]; }
+// Dock 위치를 확인할 수 있으면 해당 방향을 확대·축소의 기준으로 삼습니다.
+- (CATransform3D)transitionTransform:(CGFloat)scale {
+    CALayer *layer = self.backdrop.layer;
+    CGFloat w = NSWidth(self.backdrop.bounds), h = NSHeight(self.backdrop.bounds);
+    NSPoint pivot = NSMakePoint(w / 2, h / 2);
+    if (self.dockPresentation && !NSIsEmptyRect(self.dockIcon)) {
+        if (self.bottomDock) pivot = NSMakePoint(MAX(0, MIN(w, self.backdrop.tailX)), 0);
+        else pivot = NSMakePoint(NSMidX(self.dockIcon) < NSMidX(self.panel.frame) ? 0 : w, h / 2);
+    }
+    CGFloat x = pivot.x - layer.anchorPoint.x * w;
+    CGFloat y = pivot.y - layer.anchorPoint.y * h;
+    CATransform3D transform = CATransform3DMakeTranslation(x * (1 - scale), y * (1 - scale), 0);
+    return CATransform3DScale(transform, scale, scale, 1);
+}
+// 유리 재질은 그대로 두고 콘텐츠에만 전환 중 블러를 적용합니다.
+- (void)animateBlurFrom:(CGFloat)start to:(CGFloat)end duration:(CFTimeInterval)duration {
+    NSView *content = self.backdrop.effect;
+    content.wantsLayer = YES;
+    content.layerUsesCoreImageFilters = YES;
+    CIFilter *filter = [CIFilter filterWithName:@"CIGaussianBlur"];
+    if (!filter) return;
+    filter.name = @"transitionBlur";
+    [filter setValue:@(end) forKey:kCIInputRadiusKey];
+    NSUInteger generation = self.transitionGeneration;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    __weak typeof(self) weakSelf = self;
+    [CATransaction setCompletionBlock:^{
+        if (weakSelf.transitionGeneration == generation) {
+            [CATransaction begin];
+            [CATransaction setDisableActions:YES];
+            weakSelf.backdrop.effect.layer.filters = nil;
+            [CATransaction commit];
+        }
+    }];
+    [content.layer removeAnimationForKey:@"launcherBlur"];
+    content.layer.filters = @[filter];
+    CABasicAnimation *blur = [CABasicAnimation animationWithKeyPath:@"filters.transitionBlur.inputRadius"];
+    blur.fromValue = @(start);
+    blur.toValue = @(end);
+    blur.duration = duration;
+    blur.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+    [content.layer addAnimation:blur forKey:@"launcherBlur"];
+    [CATransaction commit];
+}
+- (void)animateEntrance {
+    BOOL reduced = NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion;
+    CAAnimationGroup *group = [CAAnimationGroup animation];
+    group.duration = reduced ? 0.07 : 0.14;
+    CABasicAnimation *fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
+    fade.fromValue = @0; fade.toValue = @1;
+    fade.duration = group.duration;
+    fade.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
+    NSMutableArray *animations = [NSMutableArray arrayWithObject:fade];
+    if (!reduced) {
+        CAKeyframeAnimation *pop = [CAKeyframeAnimation animationWithKeyPath:@"transform"];
+        pop.values = @[[NSValue valueWithCATransform3D:[self transitionTransform:0.90]],
+                      [NSValue valueWithCATransform3D:CATransform3DIdentity],
+                      [NSValue valueWithCATransform3D:[self transitionTransform:0.995]],
+                      [NSValue valueWithCATransform3D:CATransform3DIdentity]];
+        pop.keyTimes = @[@0, @0.72, @0.88, @1];
+        pop.duration = group.duration;
+        pop.timingFunctions = @[[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut],
+                                [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut],
+                                [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut]];
+        [animations addObject:pop];
+    }
+    group.animations = animations;
+    [self.backdrop.layer addAnimation:group forKey:@"launcherTransition"];
+    if (!reduced) [self animateBlurFrom:5 to:0 duration:group.duration];
+}
+- (void)hide {
+    if (!self.panel.isVisible || self.hiding) return;
+    self.hiding = YES;
+    NSUInteger generation = ++self.transitionGeneration;
+    CALayer *layer = self.backdrop.layer;
+    CALayer *presented = layer.presentationLayer ?: layer;
+    CATransform3D currentTransform = presented.transform;
+    float currentOpacity = presented.opacity;
+    BOOL reduced = NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion;
+    CALayer *contentLayer = self.backdrop.effect.layer;
+    CIFilter *presentedFilter = contentLayer.presentationLayer.filters.firstObject;
+    NSNumber *radius = [presentedFilter valueForKey:kCIInputRadiusKey];
+    CGFloat currentBlur = radius.doubleValue;
+    [layer removeAnimationForKey:@"launcherTransition"];
+    CAAnimationGroup *group = [CAAnimationGroup animation];
+    group.duration = reduced ? 0.06 : 0.09;
+    group.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+    CABasicAnimation *fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
+    fade.fromValue = @(currentOpacity); fade.toValue = @0;
+    fade.duration = group.duration;
+    NSMutableArray *animations = [NSMutableArray arrayWithObject:fade];
+    if (!reduced) {
+        CABasicAnimation *shrink = [CABasicAnimation animationWithKeyPath:@"transform"];
+        shrink.duration = group.duration;
+        shrink.fromValue = [NSValue valueWithCATransform3D:currentTransform];
+        shrink.toValue = [NSValue valueWithCATransform3D:[self transitionTransform:0.94]];
+        [animations addObject:shrink];
+    }
+    group.animations = animations;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    __weak typeof(self) weakSelf = self;
+    [CATransaction setCompletionBlock:^{
+        // 다시 연 창을 이전 퇴장 애니메이션이 닫지 않도록 합니다.
+        if (weakSelf.transitionGeneration == generation && weakSelf.hiding) {
+            [weakSelf.panel orderOut:nil];
+            weakSelf.hiding = NO;
+        }
+    }];
+    layer.opacity = 0;
+    [layer addAnimation:group forKey:@"launcherTransition"];
+    [CATransaction commit];
+    if (!reduced) [self animateBlurFrom:currentBlur to:6 duration:group.duration];
+}
 - (void)windowDidResignKey:(NSNotification *)notification { [self hide]; }
 - (void)showError:(NSString *)message {
     self.statusLabel.stringValue = message;
