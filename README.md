@@ -1,0 +1,144 @@
+# MiniLaunch
+
+~/Apps에 정리한 앱들을 반투명 Grid로 여는 macOS 네이티브 런처입니다.
+Finder alias와 하위 폴더가 곧 앱 구성입니다.
+
+## 빌드와 실행
+
+macOS 13 이상과 Icon Composer를 지원하는 Xcode 26 이상의 빌드 도구가 필요합니다.
+아이콘은 프로젝트의 icon.icon을 actool로 컴파일합니다. Command Line Tools만으로는 아이콘을 컴파일할 수 없습니다.
+Xcode GUI를 열거나 개발자 계정에 로그인할 필요는 없습니다.
+
+```sh
+# Xcode 설치 후 초기 구성 요소를 설치하지 않은 경우 실행합니다.
+sudo xcodebuild -runFirstLaunch
+
+./build.sh
+open dist/MiniLaunch.app
+```
+
+현재 Mac의 아키텍처로 빌드하며 dist/MiniLaunch.app을 생성합니다.
+인증서를 요구하지 않는 로컬 ad-hoc 서명을 사용합니다.
+인터넷 배포용 Developer ID 서명 및 공증은 포함하지 않습니다.
+
+선택적으로 사용자 Applications 폴더에 설치하실 수 있습니다.
+
+```sh
+./build.sh --install
+open ~/Applications/MiniLaunch.app
+```
+
+기존 설치가 있으면 덮어쓰지 않습니다. 앱을 종료한 뒤 기존 앱을 옮기고 다시 실행해 주세요.
+Dock 고정은 실행한 앱의 Dock 메뉴에서 직접 설정하실 수 있습니다.
+
+## 앱 구성
+
+Finder에서 ~/Apps 폴더를 만들고 원하는 앱의 alias를 넣어 주세요.
+실제 하위 폴더를 만들면 Grid 안에서 이동할 수 있습니다.
+이미 ~/Apps가 있으면 그대로 사용하며 내용을 자동 수정하지 않습니다.
+
+```text
+~/Apps/
+├── Safari
+├── Notes
+└── 개발/
+    ├── Terminal
+    └── Visual Studio Code
+```
+
+Finder의 '가상본 만들기'로 만든 파일과 심볼릭 링크를 지원합니다.
+앱 번들 자체도 표시합니다. 이름순으로 정렬하며 깨진 alias는 흐리게 표시합니다.
+다른 폴더로 시험하려면 앱을 종료하고 실행 인자를 지정해 주세요.
+
+```sh
+open dist/MiniLaunch.app --args -AppsDirectory "/절대/경로/Apps"
+```
+
+## 조작
+
+| 입력 | 동작 |
+| --- | --- |
+| Dock의 MiniLaunch 클릭 | Grid 열기 |
+| Dock 오른클릭 → Open Apps/ | ~/Apps를 Finder로 열기 (별도 경로 설정 시 해당 폴더) |
+| 앱 클릭 / Return | 선택한 앱 실행 |
+| 폴더 클릭 / Return | 폴더 안으로 이동 |
+| 방향키 | 선택 이동 |
+| ⌘↑ / ‹ 버튼 | 상위 폴더 |
+| ⌘R | 목록 다시 읽기 |
+| Esc / 바깥 클릭 | Grid 닫기 |
+| ⌘Q | 상주 프로세스 종료 |
+| 다섯 손가락 모으기 | 화면 중앙에 Grid 열기 |
+| 다섯 손가락 펼치기 | 열린 Grid 닫기 |
+
+Dock 아이콘의 정확한 위치를 사용하려면 MiniLaunch 메뉴의
+**Dock 위치 권한 허용…**을 선택하고 시스템 설정에서 접근성 권한을 허용해 주세요.
+권한 없이도 실행할 수 있습니다. 하단 Dock 영역에서 클릭한 경우에는 클릭 위치를 보조 기준으로 사용하며, 위치를 확인할 수 없으면 화면 중앙에 표시합니다.
+하단 Dock에는 말풍선 꼬리를 표시하고, 좌우 Dock은 권한으로 확인한 아이콘 안쪽에 배치합니다. 좌우 방향의 꼬리는 아직 지원하지 않습니다.
+위치 조회는 공개 [Accessibility API](https://developer.apple.com/documentation/applicationservices/axuielement.h)를 사용합니다.
+
+## 제스처 제한
+
+**Show Desktop 제스처의 조건부 차단은 아직 구현되지 않았습니다.**
+다섯 손가락 펼치기가 Grid를 닫아도 macOS의 Show Desktop이 함께 작동할 수 있습니다.
+시스템 제스처 설정은 자동 변경하지 않습니다.
+
+전역 다섯 손가락 감지는 비공개 MultitouchSupport를 사용합니다.
+[공개 AppKit 제스처 이벤트](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/EventOverview/HandlingTouchEvents/HandlingTouchEvents.html)와 별개이며,
+비공개 ABI는 [기존 구현의 선언](https://github.com/lauschue/Remotastic/blob/main/MultitouchSupport.h)을 참고했습니다.
+OS 업데이트 후 동작이 달라질 수 있습니다.
+메뉴의 '제스처 상태…'에서 장치 등록 상태를 확인할 수 있으나,
+등록 성공이 실제 프레임 수신이나 제스처 인식 성공을 뜻하지는 않습니다.
+
+새 장치 연결 및 잠자기 복귀 후 필요하면 '제스처 장치 다시 연결'을 선택해 주세요.
+제스처 없이 실행하려면 앱 종료 후 다음 명령을 사용하실 수 있습니다.
+
+```sh
+open dist/MiniLaunch.app --args -DisableGestures YES
+```
+
+## 검증
+
+```sh
+./test.sh
+```
+
+2026-09-26, macOS 27.0의 현재 개발 환경에서 확인했습니다.
+
+- 경고 없는 컴파일, 앱 번들 생성, plist 및 서명 검사 통과
+- Finder alias·심볼릭 링크·깨진 alias·하위 폴더·목록 오류 테스트 통과
+- 제스처 상태 머신의 방향·시간·접촉 수·중복 방지 테스트 통과
+- 실제 ~/Apps의 16개 항목 표시 확인
+- 검색창을 없앤 6열 Grid, 큰 아이콘과 일정한 행 간격 적용
+
+실제 다섯 손가락 입력, 접근성 권한이 있는 Dock 좌표,
+복수 모니터, 잠자기 복귀는 아직 실기 검증하지 않았습니다.
+자동 테스트는 하드웨어 제스처 및 시스템 제스처 차단을 증명하지 않습니다.
+
+세부 요구사항과 구현 경계는 [SPEC.md](SPEC.md)에 있습니다.
+
+## Grid 디자인
+
+첫 화면에는 제목 없이 Grid만 표시하며, 최대 6열과 128pt 셀 간격을 사용합니다.
+하위 폴더에서는 폴더 이름과 뒤로가기 버튼을 표시합니다.
+96pt 이미지 영역 안에 실제 앱 아이콘이 약 80pt로 표시되며 이름은 13pt입니다.
+창은 항목 수에 맞춰 크기를 조절하고 화면보다 내용이 길면 스크롤합니다.
+검색창과 상시 도움말은 표시하지 않으며 방향키 탐색은 유지합니다.
+macOS 26 이상에서는 검정 30% 틴트를 적용한 NSGlassEffectView의 Clear Liquid Glass를 사용하고, 이전 버전에서는 기존 블러 재질을 사용합니다.
+둥근 모서리와 하단 꼬리 마스크를 유지합니다.
+
+Dock의 정확한 위치와 여러 모니터 배치는 아직 실기 검증하지 못했습니다.
+이번 디자인 확인에서는 자동화 도구의 Dock 접근이 시간 초과되어,
+실제 Dock 아이콘을 클릭한 배치 검증은 완료하지 못했습니다.
+
+빌드 시 build/의 중간 산출물은 모두 재생성하며, 컴파일 성공 후 dist/MiniLaunch.app도 새로 조립합니다.
+아이콘 원본은 icon.icon 하나만 관리합니다.
+
+
+## Finder Tag 그룹
+
+~/Apps 안의 alias 파일에 Finder Tag를 지정하면 Tag 이름순으로 그룹화합니다.
+원본 앱의 Tag가 아닌 alias 자체의 Tag를 사용합니다.
+각 그룹의 항목은 이름순이며, Tag 없는 항목은 마지막에 모읍니다.
+그룹 제목은 표시하지 않고 새 행과 얇은 구분선으로 나눕니다.
+Tag가 여러 개면 해당하는 각 그룹에 표시합니다.
+다시 열거나 ⌘R을 누르면 변경된 Tag를 읽습니다.
