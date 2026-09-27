@@ -40,6 +40,7 @@ static const CGFloat GroupGap = 20;
 @property NSInteger columns;
 @property NSRect availableFrame;
 @property NSRect dockIcon;
+@property NSRect menuBarAnchor;
 @property BOOL dockPresentation;
 @property BOOL bottomDock;
 @property BOOL hiding;
@@ -113,6 +114,13 @@ static const CGFloat GroupGap = 20;
 }
 - (BOOL)visible { return self.panel.isVisible && !self.hiding; }
 - (void)showFromDock:(BOOL)fromDock {
+    [self showFromDock:fromDock menuBarRect:NSZeroRect];
+}
+- (void)showFromMenuBarRect:(NSRect)rect {
+    [self showFromDock:NO menuBarRect:rect];
+}
+- (void)showFromDock:(BOOL)fromDock menuBarRect:(NSRect)rect {
+    self.menuBarAnchor = rect;
     BOOL alreadyVisible = self.visible;
     self.transitionGeneration++;
     self.hiding = NO;
@@ -128,6 +136,7 @@ static const CGFloat GroupGap = 20;
     self.dockIcon = fromDock ? DockLocator.iconRect : NSZeroRect;
     NSPoint mouse = NSEvent.mouseLocation;
     NSPoint point = NSIsEmptyRect(self.dockIcon) ? mouse : NSMakePoint(NSMidX(self.dockIcon), NSMidY(self.dockIcon));
+    if (!NSIsEmptyRect(rect)) point = NSMakePoint(NSMidX(rect), NSMidY(rect));
     NSScreen *screen = NSScreen.mainScreen ?: NSScreen.screens.firstObject;
     for (NSScreen *candidate in NSScreen.screens)
         if (NSPointInRect(point, candidate.frame)) { screen = candidate; break; }
@@ -177,6 +186,10 @@ static const CGFloat GroupGap = 20;
             frame.origin.y = NSMidY(self.dockIcon) - height / 2;
         }
     }
+    if (!NSIsEmptyRect(self.menuBarAnchor)) {
+        frame.origin.x = NSMidX(self.menuBarAnchor) - width / 2;
+        frame.origin.y = MIN(NSMaxY(area), NSMinY(self.menuBarAnchor) - 8) - height;
+    }
     frame.origin.x = MAX(NSMinX(area), MIN(frame.origin.x, NSMaxX(area) - width));
     frame.origin.y = MAX(NSMinY(area), MIN(frame.origin.y, NSMaxY(area) - height));
     [self.panel setFrame:frame display:NO];
@@ -189,7 +202,7 @@ static const CGFloat GroupGap = 20;
     self.scroll.frame = NSMakeRect(SideInset, bottom + 10, width - SideInset * 2, height - topInset - 10 - bottom);
     self.statusLabel.frame = NSMakeRect(24, bottom + 2, width - 48, 16);
 }
-// Dock 위치를 확인할 수 있으면 해당 방향을 확대·축소의 기준으로 삼습니다.
+// 메뉴 막대 또는 Dock 위치를 확대·축소의 기준으로 삼습니다.
 - (CATransform3D)transitionTransform:(CGFloat)scale {
     CALayer *layer = self.backdrop.layer;
     CGFloat w = NSWidth(self.backdrop.bounds), h = NSHeight(self.backdrop.bounds);
@@ -197,6 +210,9 @@ static const CGFloat GroupGap = 20;
     if (self.dockPresentation && !NSIsEmptyRect(self.dockIcon)) {
         if (self.bottomDock) pivot = NSMakePoint(MAX(0, MIN(w, self.backdrop.tailX)), 0);
         else pivot = NSMakePoint(NSMidX(self.dockIcon) < NSMidX(self.panel.frame) ? 0 : w, h / 2);
+    }
+    if (!NSIsEmptyRect(self.menuBarAnchor)) {
+        pivot = NSMakePoint(MAX(0, MIN(w, NSMidX(self.menuBarAnchor) - NSMinX(self.panel.frame))), h);
     }
     CGFloat x = pivot.x - layer.anchorPoint.x * w;
     CGFloat y = pivot.y - layer.anchorPoint.y * h;

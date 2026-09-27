@@ -7,6 +7,7 @@
 @property GestureMonitor *gestures;
 @property NSUInteger gestureReconnectGeneration;
 @property NSStatusItem *statusItem;
+@property NSMenu *statusMenu;
 @end
 @implementation AppDelegate
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
@@ -28,9 +29,27 @@
     NSApp.mainMenu = menu;
     // 보조 앱에는 앱 메뉴 막대가 없으므로 관리 명령을 상태 메뉴로 제공합니다.
     self.statusItem = [NSStatusBar.systemStatusBar statusItemWithLength:NSSquareStatusItemLength];
-    self.statusItem.button.image = [NSImage imageWithSystemSymbolName:@"square.grid.2x2" accessibilityDescription:@"MiniLaunch"];
+    // 전체 크기는 유지하면서 박스 사이에 여유를 둡니다.
+    NSImage *statusIcon = [NSImage imageWithSize:NSMakeSize(15, 15) flipped:NO drawingHandler:^BOOL(NSRect bounds) {
+        CGFloat boxSize = 3.75;
+        CGFloat gap = (NSWidth(bounds) - boxSize * 3) / 2;
+        [NSColor.blackColor setFill];
+        for (NSUInteger row = 0; row < 3; row++) {
+            for (NSUInteger column = 0; column < 3; column++) {
+                NSRect box = NSMakeRect(column * (boxSize + gap), row * (boxSize + gap), boxSize, boxSize);
+                [[NSBezierPath bezierPathWithRoundedRect:box xRadius:0.8 yRadius:0.8] fill];
+            }
+        }
+        return YES;
+    }];
+    statusIcon.template = YES;
+    statusIcon.accessibilityDescription = @"MiniLaunch";
+    self.statusItem.button.image = statusIcon;
     self.statusItem.button.toolTip = @"MiniLaunch";
-    self.statusItem.menu = [appMenu copy];
+    self.statusMenu = [appMenu copy];
+    self.statusItem.button.target = self;
+    self.statusItem.button.action = @selector(statusItemClicked:);
+    [self.statusItem.button sendActionOn:NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp];
     NSString *root = [NSUserDefaults.standardUserDefaults stringForKey:@"AppsDirectory"] ?: @"~/Apps";
     self.launcher = [[LauncherController alloc] initWithRoot:[NSURL fileURLWithPath:root.stringByExpandingTildeInPath]];
     self.gestures = [GestureMonitor new];
@@ -48,6 +67,20 @@
         }
     }
     [self.launcher showFromDock:NO];
+}
+- (void)statusItemClicked:(NSStatusBarButton *)button {
+    NSEvent *event = NSApp.currentEvent;
+    if (event.type == NSEventTypeRightMouseUp || (event.modifierFlags & NSEventModifierFlagControl)) {
+        [self.launcher hide];
+        [self.statusMenu popUpMenuPositioningItem:nil atLocation:NSMakePoint(0, NSMinY(button.bounds)) inView:button];
+        return;
+    }
+    if (self.launcher.visible) {
+        [self.launcher hide];
+        return;
+    }
+    NSRect rect = [button.window convertRectToScreen:[button convertRect:button.bounds toView:nil]];
+    [self.launcher showFromMenuBarRect:rect];
 }
 - (void)show:(id)sender { [self.launcher showFromDock:NO]; }
 - (NSMenu *)applicationDockMenu:(NSApplication *)sender {
