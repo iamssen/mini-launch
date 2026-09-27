@@ -6,6 +6,7 @@
 @property LauncherController *launcher;
 @property GestureMonitor *gestures;
 @property NSUInteger gestureReconnectGeneration;
+@property NSStatusItem *statusItem;
 @end
 @implementation AppDelegate
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
@@ -25,6 +26,11 @@
     [edit addItemWithTitle:@"붙여넣기" action:@selector(paste:) keyEquivalent:@"v"];
     [edit addItemWithTitle:@"전체 선택" action:@selector(selectAll:) keyEquivalent:@"a"];
     NSApp.mainMenu = menu;
+    // 보조 앱에는 앱 메뉴 막대가 없으므로 관리 명령을 상태 메뉴로 제공합니다.
+    self.statusItem = [NSStatusBar.systemStatusBar statusItemWithLength:NSSquareStatusItemLength];
+    self.statusItem.button.image = [NSImage imageWithSystemSymbolName:@"square.grid.2x2" accessibilityDescription:@"MiniLaunch"];
+    self.statusItem.button.toolTip = @"MiniLaunch";
+    self.statusItem.menu = [appMenu copy];
     NSString *root = [NSUserDefaults.standardUserDefaults stringForKey:@"AppsDirectory"] ?: @"~/Apps";
     self.launcher = [[LauncherController alloc] initWithRoot:[NSURL fileURLWithPath:root.stringByExpandingTildeInPath]];
     self.gestures = [GestureMonitor new];
@@ -98,7 +104,8 @@
 int main(void) {
     @autoreleasepool {
         NSApplication *app = NSApplication.sharedApplication;
-        [app setActivationPolicy:NSApplicationActivationPolicyRegular];
+        // Dock 재열기가 일반 앱 활성화와 Space 전환을 유발하지 않게 합니다.
+        [app setActivationPolicy:NSApplicationActivationPolicyAccessory];
         AppDelegate *delegate = [AppDelegate new]; app.delegate = delegate;
         [app run];
     }

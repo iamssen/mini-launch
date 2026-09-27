@@ -14,7 +14,7 @@ static const CGFloat GroupGap = 20;
 @end
 @implementation LauncherPanel
 - (BOOL)canBecomeKeyWindow { return YES; }
-- (BOOL)canBecomeMainWindow { return YES; }
+- (BOOL)canBecomeMainWindow { return NO; }
 @end
 @interface FlippedView : NSView
 @end
@@ -54,14 +54,20 @@ static const CGFloat GroupGap = 20;
     _root = root;
     _path = [NSMutableArray arrayWithObject:root];
     _panel = [[LauncherPanel alloc] initWithContentRect:NSMakeRect(0, 0, 800, 442)
-        styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO];
+        styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
+        backing:NSBackingStoreBuffered defer:NO];
     _panel.delegate = self;
     _panel.opaque = NO;
     _panel.backgroundColor = NSColor.clearColor;
     _panel.hasShadow = YES;
     _panel.level = NSFloatingWindowLevel;
     _panel.hidesOnDeactivate = NO;
-    _panel.collectionBehavior = NSWindowCollectionBehaviorMoveToActiveSpace | NSWindowCollectionBehaviorFullScreenAuxiliary;
+    // 앱 활성화로 Space를 옮기지 않고 현재 전체 화면 앱 위에서 입력을 받습니다.
+    _panel.becomesKeyOnlyIfNeeded = NO;
+    _panel.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorFullScreenAuxiliary;
+    if (@available(macOS 13.0, *)) {
+        _panel.collectionBehavior |= NSWindowCollectionBehaviorCanJoinAllApplications;
+    }
     _panel.accessibilityLabel = @"MiniLaunch 앱 실행기";
     _backdrop = [[LauncherBackdrop alloc] initWithFrame:_panel.contentView.bounds];
     _panel.contentView = _backdrop;
@@ -139,7 +145,6 @@ static const CGFloat GroupGap = 20;
     }
     self.path = [NSMutableArray arrayWithObject:self.root];
     [self reload];
-    [NSApp activateIgnoringOtherApps:YES];
     [self.panel makeKeyAndOrderFront:nil];
     [self.panel makeFirstResponder:self.panel];
     [self.panel invalidateShadow];

@@ -25,6 +25,8 @@ Xcode 26 이상의 CLI 빌드 도구와 ./build.sh만으로 dist/MiniLaunch.app�
 - AppKit NSPanel과 macOS 26 이상의 NSGlassEffectView(Clear, 검정 50% 틴트)로 유리 재질의 Grid를 표시합니다. 이전 버전은 NSVisualEffectView를 사용합니다.
 - 첫 실행과 네 손가락 또는 다섯 손가락 모으기는 포인터가 있는 화면 중앙에 표시합니다.
 - Dock 재열기는 Accessibility API로 자기 앱의 Dock 위치를 찾습니다.
+- 핀치와 Dock 재열기는 현재 Space의 전체 화면 앱 위에 비활성화 패널을 표시합니다. 표시할 때 앱을 강제로 활성화하지 않으며 패널이 키보드 입력을 받습니다.
+- LSUIElement 보조 앱으로 실행하여 Dock의 일반 앱 활성화를 피합니다. 사용자가 고정한 Dock 아이콘으로 재열기하며, 관리 명령은 메뉴 막대의 상태 아이콘에서 제공합니다. 실행 중 Dock 아이콘 자동 추가와 ⌘Tab 등록은 하지 않습니다.
 - 접근성 권한이 없으면 하단 Dock 영역의 클릭 위치를 보조 기준으로 사용합니다. 위치를 확인할 수 없으면 화면 중앙에 배치합니다.
 - 하단 Dock에서는 아이콘 위, 좌우 Dock에서는 안쪽에 배치하고 visibleFrame으로 제한합니다.
 - 검색창은 표시하지 않으며 방향키 선택, Return 실행, ⌘↑ 상위 폴더, Esc 닫기, 바깥 클릭 닫기를 제공합니다.
