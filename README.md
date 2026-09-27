@@ -67,8 +67,8 @@ open dist/MiniLaunch.app --args -AppsDirectory "/절대/경로/Apps"
 | ⌘R | 목록 다시 읽기 |
 | Esc / 바깥 클릭 | Grid 닫기 |
 | ⌘Q | 상주 프로세스 종료 |
-| 다섯 손가락 모으기 | 화면 중앙에 Grid 열기 |
-| 다섯 손가락 펼치기 | 열린 Grid 닫기 |
+| 네 손가락 또는 다섯 손가락 모으기 | 화면 중앙에 Grid 열기 |
+| 네 손가락 또는 다섯 손가락 펼치기 | 열린 Grid 닫기 |
 
 Dock 아이콘의 정확한 위치를 사용하려면 MiniLaunch 메뉴의
 **Dock 위치 권한 허용…**을 선택하고 시스템 설정에서 접근성 권한을 허용해 주세요.
@@ -78,11 +78,17 @@ Dock 아이콘의 정확한 위치를 사용하려면 MiniLaunch 메뉴의
 
 ## 제스처 제한
 
+네 손가락과 다섯 손가락을 모두 지원합니다. 짧은 접촉 누락(120ms 이내)은 허용하며,
+손가락 수 변화 자체를 모으기·펼치기로 판단하지 않도록 거리 기준을 보정합니다.
+모아서 연 뒤 손을 떼지 않고 충분히 펼치면 닫을 수 있습니다. 같은 방향의 움직임과 작은 떨림은 중복 실행하지 않습니다.
+
+2026-09-27 인식 개선은 합성 입력 테스트로 검증하며, 실제 트랙패드의 민감도와 사용감은 아직 실기 검증하지 않았습니다.
+
 **Show Desktop 제스처의 조건부 차단은 아직 구현되지 않았습니다.**
-다섯 손가락 펼치기가 Grid를 닫아도 macOS의 Show Desktop이 함께 작동할 수 있습니다.
+네 손가락 또는 다섯 손가락 펼치기가 Grid를 닫아도 macOS의 Show Desktop이 함께 작동할 수 있습니다.
 시스템 제스처 설정은 자동 변경하지 않습니다.
 
-전역 다섯 손가락 감지는 비공개 MultitouchSupport를 사용합니다.
+전역 네 손가락 또는 다섯 손가락 감지는 비공개 MultitouchSupport를 사용합니다.
 [공개 AppKit 제스처 이벤트](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/EventOverview/HandlingTouchEvents/HandlingTouchEvents.html)와 별개이며,
 비공개 ABI는 [기존 구현의 선언](https://github.com/lauschue/Remotastic/blob/main/MultitouchSupport.h)을 참고했습니다.
 OS 업데이트 후 동작이 달라질 수 있습니다.
@@ -110,7 +116,7 @@ open dist/MiniLaunch.app --args -DisableGestures YES
 - 실제 ~/Apps의 16개 항목 표시 확인
 - 검색창을 없앤 6열 Grid, 큰 아이콘과 일정한 행 간격 적용
 
-실제 다섯 손가락 입력, 접근성 권한이 있는 Dock 좌표,
+실제 네 손가락 또는 다섯 손가락 입력, 접근성 권한이 있는 Dock 좌표,
 복수 모니터, 잠자기 복귀는 아직 실기 검증하지 않았습니다.
 자동 테스트는 하드웨어 제스처 및 시스템 제스처 차단을 증명하지 않습니다.
 

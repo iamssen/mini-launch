@@ -79,7 +79,7 @@ static void contacts(void *device, MTContact *touches, size_t count, double time
         void *device = (void *)CFArrayGetValueAtIndex(_devices, i);
         _register(device, contacts); _start(device, 0);
     }
-    self.status = @"다섯 손가락 제스처 감지 대기 중";
+    self.status = @"네 손가락 또는 다섯 손가락 제스처 감지 대기 중";
 }
 - (void)consumeDevice:(void *)device count:(int)count radius:(double)radius time:(double)time {
     if (!self.running) return;

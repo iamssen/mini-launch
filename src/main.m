@@ -52,7 +52,7 @@
 }
 - (void)gestureStatus:(id)sender {
     NSAlert *alert = [NSAlert new]; alert.messageText = self.gestures.status ?: @"제스처 비활성화";
-    alert.informativeText = @"다섯 손가락을 모으면 열리고 펼치면 닫힙니다. 시스템의 Show Desktop 제스처 차단은 지원하지 않습니다.";
+    alert.informativeText = @"네 손가락 또는 다섯 손가락을 모으면 열리고 펼치면 닫힙니다. 시스템의 Show Desktop 제스처 차단은 지원하지 않습니다.";
     [alert runModal];
 }
 - (void)restartGestures:(id)sender { [self.gestures stop]; [self.gestures start]; }

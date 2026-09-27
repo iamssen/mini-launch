@@ -5,22 +5,42 @@ static void check(BOOL condition, NSString *message) {
     if (!condition) { NSLog(@"실패: %@", message); exit(1); }
 }
 static void gestureTests(void) {
+    for (int count = 4; count <= 5; count++) {
+        MLGestureState s = {0};
+        check(MLRecognize(&s, count, 0.3, 1) == 0, @"첫 프레임은 기준만 저장합니다.");
+        check(MLRecognize(&s, count, 0.2, 1.04) == 0, @"너무 빠른 변화는 무시합니다.");
+        check(MLRecognize(&s, count, 0.2, 1.1) == -1, @"네 손가락과 다섯 손가락 모으기를 감지합니다.");
+        check(MLRecognize(&s, count, 0.15, 1.2) == 0, @"계속 모아도 중복 실행하지 않습니다.");
+        check(MLRecognize(&s, count, 0.17, 1.3) == 0, @"작은 역방향 떨림은 무시합니다.");
+        check(MLRecognize(&s, count, 0.21, 1.4) == 1, @"손을 떼지 않고 펼쳐 닫습니다.");
+        check(MLRecognize(&s, count, 0.3, 1.5) == 0, @"계속 펼쳐도 중복 실행하지 않습니다.");
+        check(MLRecognize(&s, count, 0.2, 1.6) == -1, @"다시 모으면 열 수 있습니다.");
+        MLRecognize(&s, 0, 0, 1.7);
+        MLRecognize(&s, count, 0.2, 2);
+        check(MLRecognize(&s, count, 0.28, 2.1) == 1, @"새 접촉에서 펼치기로 시작할 수 있습니다.");
+    }
     MLGestureState s = {0};
-    check(MLRecognize(&s, 5, 0.3, 1) == 0, @"첫 프레임은 기준만 저장합니다.");
-    check(MLRecognize(&s, 5, 0.2, 1.04) == 0, @"너무 빠른 변화는 무시합니다.");
-    check(MLRecognize(&s, 5, 0.2, 1.1) == -1, @"다섯 손가락 모으기를 감지합니다.");
-    check(MLRecognize(&s, 5, 0.4, 1.2) == 0, @"한 번의 접촉에서는 중복 실행하지 않습니다.");
-    MLRecognize(&s, 4, 0.3, 1.3);
-    check(MLRecognize(&s, 5, 0.2, 1.4) == 0, @"손가락 수가 흔들려도 중복 실행하지 않습니다.");
-    MLRecognize(&s, 0, 0, 1.5);
-    MLRecognize(&s, 5, 0.2, 2);
-    check(MLRecognize(&s, 5, 0.28, 2.1) == 1, @"다시 접촉한 뒤 펼치기를 감지합니다.");
-    MLRecognize(&s, 0, 0, 3);
-    MLRecognize(&s, 4, 0.3, 3.1);
-    check(MLRecognize(&s, 4, 0.1, 3.2) == 0, @"네 손가락은 실행하지 않습니다.");
-    MLRecognize(&s, 5, 0.3, 4);
-    check(MLRecognize(&s, 5, 0.1, 5) == 0, @"끊긴 프레임을 새 접촉으로 처리합니다.");
-    check(MLRecognize(&s, 5, NAN, 5.1) == 0, @"유효하지 않은 좌표를 무시합니다.");
+    MLRecognize(&s, 4, 0.3, 1);
+    MLRecognize(&s, 4, 0.25, 1.1);
+    check(MLRecognize(&s, 5, 0.5, 1.2) == 0, @"손가락 추가에 따른 거리 증가는 펼치기가 아닙니다.");
+    check(MLRecognize(&s, 5, 0.41, 1.3) == -1, @"손가락이 추가되어도 이전 모으기 진행량을 보존합니다.");
+    check(MLRecognize(&s, 4, 0.2, 1.4) == 0, @"손가락 제거에 따른 거리 감소는 동작이 아닙니다.");
+    check(MLRecognize(&s, 4, 0.2, 1.5) == 0, @"접촉 수 변화 후 정지하면 실행하지 않습니다.");
+    check(MLRecognize(&s, 4, 0.27, 1.6) == 1, @"접촉 수 변화 후에도 반대 방향을 인식합니다.");
+    s = (MLGestureState){0};
+    MLRecognize(&s, 4, 0.3, 2);
+    MLRecognize(&s, 4, 0.25, 2.1);
+    check(MLRecognize(&s, 3, 0.1, 2.12) == 0, @"세 손가락 프레임은 실행하지 않습니다.");
+    check(MLRecognize(&s, 4, 0.2, 2.18) == 0, @"짧은 누락 중 거리 변화는 실행하지 않습니다.");
+    check(MLRecognize(&s, 4, 0.17, 2.28) == -1, @"짧은 누락 이전의 진행량을 보존합니다.");
+    MLRecognize(&s, 3, 0.1, 2.3);
+    check(MLRecognize(&s, 4, 0.4, 2.5) == 0, @"긴 누락 뒤에는 새 기준을 잡습니다.");
+    check(MLRecognize(&s, 4, 0.2, 3) == 0, @"끊긴 프레임을 새 접촉으로 처리합니다.");
+    check(MLRecognize(&s, 4, NAN, 3.1) == 0, @"유효하지 않은 좌표를 무시합니다.");
+    MLRecognize(&s, 3, 0.3, 4);
+    check(MLRecognize(&s, 3, 0.1, 4.1) == 0, @"세 손가락만으로는 실행하지 않습니다.");
+    MLRecognize(&s, 4, 0.3, 5);
+    check(MLRecognize(&s, 4, 0.1, 4.9) == 0, @"시간이 역행하면 새 기준을 잡습니다.");
 }
 static void catalogTests(void) {
     NSFileManager *fm = NSFileManager.defaultManager;
