@@ -2,6 +2,7 @@
 #import "GestureRecognizer.h"
 #import <dlfcn.h>
 #import <math.h>
+#import <stdatomic.h>
 
 // 비공개 ABI입니다. OS 업데이트에 따라 구조 및 함수가 바뀔 수 있습니다.
 typedef struct { float x, y; } MTPoint;
@@ -17,15 +18,18 @@ typedef struct {
 } MTContact;
 typedef void (*MTCallback)(void *, MTContact *, size_t, double, size_t);
 static __weak GestureMonitor *activeMonitor;
+static atomic_uint_fast64_t connectionGeneration;
 
 @interface GestureMonitor ()
 @property NSString *status;
 @property NSMutableDictionary<NSValue *, NSValue *> *states;
 @property BOOL running;
+@property BOOL receivedFrame;
 - (void)consumeDevice:(void *)device count:(int)count radius:(double)radius time:(double)time;
 @end
 static void contacts(void *device, MTContact *touches, size_t count, double time, size_t frame) {
     (void)frame;
+    uint_fast64_t generation = atomic_load(&connectionGeneration);
     if (count > 16) return;
     double x = 0, y = 0; int n = 0;
     for (size_t i = 0; i < count; i++) {
@@ -45,6 +49,8 @@ static void contacts(void *device, MTContact *touches, size_t count, double time
         radius /= n;
     }
     dispatch_async(dispatch_get_main_queue(), ^{
+        // 재연결 전에 대기열에 들어온 프레임은 새 인식 상태에 섞지 않습니다.
+        if (generation != atomic_load(&connectionGeneration)) return;
         [activeMonitor consumeDevice:device count:n radius:radius time:time];
     });
 }
@@ -56,9 +62,11 @@ static void contacts(void *device, MTContact *touches, size_t count, double time
     void (*_start)(void *, int);
     void (*_stop)(void *);
 }
+- (BOOL)connected { return self.running; }
 - (void)start {
     if (self.running) return;
     self.states = [NSMutableDictionary dictionary];
+    self.receivedFrame = NO;
     if (!_library) _library = dlopen("/System/Library/PrivateFrameworks/MultitouchSupport.framework/MultitouchSupport", RTLD_LOCAL | RTLD_NOW);
     if (!_library) { self.status = @"제스처 사용 불가: 비공개 프레임워크 없음"; return; }
     CFArrayRef (*createList)(void) = dlsym(_library, "MTDeviceCreateList");
@@ -79,10 +87,16 @@ static void contacts(void *device, MTContact *touches, size_t count, double time
         void *device = (void *)CFArrayGetValueAtIndex(_devices, i);
         _register(device, contacts); _start(device, 0);
     }
-    self.status = @"네 손가락 또는 다섯 손가락 제스처 감지 대기 중";
+    self.status = @"제스처 장치 연결됨: 첫 입력 대기 중";
+    NSLog(@"제스처 장치 연결: %ld개", (long)CFArrayGetCount(_devices));
 }
 - (void)consumeDevice:(void *)device count:(int)count radius:(double)radius time:(double)time {
     if (!self.running) return;
+    if (!self.receivedFrame) {
+        self.receivedFrame = YES;
+        self.status = @"네 손가락 또는 다섯 손가락 제스처 입력 수신 중";
+        NSLog(@"제스처 연결 후 첫 입력 수신");
+    }
     NSValue *key = [NSValue valueWithPointer:device];
     MLGestureState state = {0};
     [self.states[key] getValue:&state size:sizeof(state)];
@@ -92,6 +106,7 @@ static void contacts(void *device, MTContact *touches, size_t count, double time
 }
 - (void)stop {
     self.running = NO; activeMonitor = nil;
+    atomic_fetch_add(&connectionGeneration, 1);
     if (_devices) {
         for (CFIndex i = 0; i < CFArrayGetCount(_devices); i++) {
             void *device = (void *)CFArrayGetValueAtIndex(_devices, i);
