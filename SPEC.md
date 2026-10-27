@@ -71,3 +71,10 @@ Xcode 26 이상의 CLI 빌드 도구와 ./build.sh만으로 dist/MiniLaunch.app�
 ./test.sh: alias 해석·깨진 alias·폴더 구별·파일 제외·읽기 실패,
 제스처 방향·접촉 수·시간 제한·중복 방지·잘못된 좌표를 검증합니다.
 실기 결과와 남은 확인 항목은 README.md에 기록합니다.
+
+## 관리 메뉴
+
+- 메뉴 막대 아이콘 클릭으로 Grid를 열고 닫으며, 오른클릭 메뉴에는 별도의 열기 명령을 두지 않습니다.
+- 폴더 열기는 `Open <경로>`로 표시하며 실제 앱 폴더의 홈 디렉터리 부분은 `~`로 줄입니다. Dock 폴더 열기도 같은 이름을 사용합니다.
+- `Advanced` 아래에 `Allow Dock Position Access…`, `Gesture Status…`, `Reconnect Gesture Devices`를 배치합니다.
+- 종료는 `Quit MiniLaunch`이며 편집 메뉴를 포함한 메뉴 이름은 영문으로 표시합니다.

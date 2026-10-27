@@ -10,22 +10,41 @@
 @property NSMenu *statusMenu;
 @end
 @implementation AppDelegate
+- (NSURL *)appsDirectoryURL {
+    NSString *root = [NSUserDefaults.standardUserDefaults stringForKey:@"AppsDirectory"] ?: @"~/Apps";
+    return [NSURL fileURLWithPath:root.stringByExpandingTildeInPath].URLByStandardizingPath;
+}
+- (NSString *)openFolderMenuTitle {
+    return [@"Open " stringByAppendingString:self.appsDirectoryURL.path.stringByAbbreviatingWithTildeInPath];
+}
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     NSMenu *menu = [NSMenu new];
     NSMenuItem *appItem = [NSMenuItem new]; [menu addItem:appItem];
     NSMenu *appMenu = [NSMenu new]; appItem.submenu = appMenu;
-    NSArray *titles = @[@"MiniLaunch 열기", @"앱 폴더 열기", @"Dock 위치 권한 허용…", @"제스처 상태…", @"제스처 장치 다시 연결", @"MiniLaunch 종료"];
-    NSArray *actions = @[@"show:", @"openFolder:", @"requestAccessibility:", @"gestureStatus:", @"restartGestures:", @"terminate:"];
+    NSMenuItem *openFolder = [[NSMenuItem alloc] initWithTitle:self.openFolderMenuTitle action:@selector(openFolder:) keyEquivalent:@""];
+    openFolder.target = self;
+    [appMenu addItem:openFolder];
+    NSMenuItem *advancedItem = [[NSMenuItem alloc] initWithTitle:@"Advanced" action:nil keyEquivalent:@""];
+    NSMenu *advanced = [[NSMenu alloc] initWithTitle:@"Advanced"];
+    advancedItem.submenu = advanced;
+    [appMenu addItem:advancedItem];
+    NSArray *titles = @[@"Allow Dock Position Access…", @"Gesture Status…", @"Reconnect Gesture Devices"];
+    NSArray *actions = @[@"requestAccessibility:", @"gestureStatus:", @"restartGestures:"];
     for (NSUInteger i = 0; i < titles.count; i++) {
-        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:titles[i] action:NSSelectorFromString(actions[i]) keyEquivalent:i == 5 ? @"q" : @""];
-        item.target = i == 5 ? NSApp : self; [appMenu addItem:item];
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:titles[i] action:NSSelectorFromString(actions[i]) keyEquivalent:@""];
+        item.target = self;
+        [advanced addItem:item];
     }
+    [appMenu addItem:NSMenuItem.separatorItem];
+    NSMenuItem *quit = [[NSMenuItem alloc] initWithTitle:@"Quit MiniLaunch" action:@selector(terminate:) keyEquivalent:@"q"];
+    quit.target = NSApp;
+    [appMenu addItem:quit];
     NSMenuItem *editItem = [NSMenuItem new]; [menu addItem:editItem];
-    NSMenu *edit = [[NSMenu alloc] initWithTitle:@"편집"]; editItem.submenu = edit;
-    [edit addItemWithTitle:@"잘라내기" action:@selector(cut:) keyEquivalent:@"x"];
-    [edit addItemWithTitle:@"복사" action:@selector(copy:) keyEquivalent:@"c"];
-    [edit addItemWithTitle:@"붙여넣기" action:@selector(paste:) keyEquivalent:@"v"];
-    [edit addItemWithTitle:@"전체 선택" action:@selector(selectAll:) keyEquivalent:@"a"];
+    NSMenu *edit = [[NSMenu alloc] initWithTitle:@"Edit"]; editItem.submenu = edit;
+    [edit addItemWithTitle:@"Cut" action:@selector(cut:) keyEquivalent:@"x"];
+    [edit addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@"c"];
+    [edit addItemWithTitle:@"Paste" action:@selector(paste:) keyEquivalent:@"v"];
+    [edit addItemWithTitle:@"Select All" action:@selector(selectAll:) keyEquivalent:@"a"];
     NSApp.mainMenu = menu;
     // 보조 앱에는 앱 메뉴 막대가 없으므로 관리 명령을 상태 메뉴로 제공합니다.
     self.statusItem = [NSStatusBar.systemStatusBar statusItemWithLength:NSSquareStatusItemLength];
@@ -50,8 +69,7 @@
     self.statusItem.button.target = self;
     self.statusItem.button.action = @selector(statusItemClicked:);
     [self.statusItem.button sendActionOn:NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp];
-    NSString *root = [NSUserDefaults.standardUserDefaults stringForKey:@"AppsDirectory"] ?: @"~/Apps";
-    self.launcher = [[LauncherController alloc] initWithRoot:[NSURL fileURLWithPath:root.stringByExpandingTildeInPath]];
+    self.launcher = [[LauncherController alloc] initWithRoot:self.appsDirectoryURL];
     self.gestures = [GestureMonitor new];
     __weak typeof(self) weakSelf = self;
     self.gestures.onGesture = ^(NSInteger direction) {
@@ -82,17 +100,15 @@
     NSRect rect = [button.window convertRectToScreen:[button convertRect:button.bounds toView:nil]];
     [self.launcher showFromMenuBarRect:rect];
 }
-- (void)show:(id)sender { [self.launcher showFromDock:NO]; }
 - (NSMenu *)applicationDockMenu:(NSApplication *)sender {
     NSMenu *menu = [NSMenu new];
-    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:@"Open Apps/" action:@selector(openFolder:) keyEquivalent:@""];
+    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:self.openFolderMenuTitle action:@selector(openFolder:) keyEquivalent:@""];
     item.target = self;
     [menu addItem:item];
     return menu;
 }
 - (void)openFolder:(id)sender {
-    NSString *root = [NSUserDefaults.standardUserDefaults stringForKey:@"AppsDirectory"] ?: @"~/Apps";
-    [NSWorkspace.sharedWorkspace openURL:[NSURL fileURLWithPath:root.stringByExpandingTildeInPath]];
+    [NSWorkspace.sharedWorkspace openURL:self.appsDirectoryURL];
 }
 - (void)requestAccessibility:(id)sender {
     AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)@{(__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES});

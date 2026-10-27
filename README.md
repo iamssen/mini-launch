@@ -59,7 +59,7 @@ open dist/MiniLaunch.app --args -AppsDirectory "/절대/경로/Apps"
 | 입력 | 동작 |
 | --- | --- |
 | Dock의 MiniLaunch 클릭 | Grid 열기 |
-| Dock 오른클릭 → Open Apps/ | ~/Apps를 Finder로 열기 (별도 경로 설정 시 해당 폴더) |
+| Dock 오른클릭 → Open ~/Apps | ~/Apps를 Finder로 열기 (별도 경로 설정 시 해당 폴더) |
 | 앱 클릭 / Return | 선택한 앱 실행 |
 | 폴더 클릭 / Return | 폴더 안으로 이동 |
 | 방향키 | 선택 이동 |
@@ -71,7 +71,7 @@ open dist/MiniLaunch.app --args -AppsDirectory "/절대/경로/Apps"
 | 네 손가락 또는 다섯 손가락 펼치기 | 열린 Grid 닫기 |
 
 Dock 아이콘의 정확한 위치를 사용하려면 MiniLaunch 메뉴의
-**Dock 위치 권한 허용…**을 선택하고 시스템 설정에서 접근성 권한을 허용해 주세요.
+**Advanced → Allow Dock Position Access…**을 선택하고 시스템 설정에서 접근성 권한을 허용해 주세요.
 권한 없이도 실행할 수 있습니다. 하단 Dock 영역에서 클릭한 경우에는 클릭 위치를 보조 기준으로 사용하며, 위치를 확인할 수 없으면 화면 중앙에 표시합니다.
 하단 Dock에는 말풍선 꼬리를 표시하고, 좌우 Dock은 권한으로 확인한 아이콘 안쪽에 배치합니다. 좌우 방향의 꼬리는 아직 지원하지 않습니다.
 위치 조회는 공개 [Accessibility API](https://developer.apple.com/documentation/applicationservices/axuielement.h)를 사용합니다.
@@ -92,10 +92,10 @@ Dock 아이콘의 정확한 위치를 사용하려면 MiniLaunch 메뉴의
 [공개 AppKit 제스처 이벤트](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/EventOverview/HandlingTouchEvents/HandlingTouchEvents.html)와 별개이며,
 비공개 ABI는 [기존 구현의 선언](https://github.com/lauschue/Remotastic/blob/main/MultitouchSupport.h)을 참고했습니다.
 OS 업데이트 후 동작이 달라질 수 있습니다.
-메뉴의 '제스처 상태…'에서 장치 등록 상태를 확인할 수 있으나,
+메뉴의 'Advanced → Gesture Status…'에서 장치 등록 상태를 확인할 수 있으나,
 등록 성공이 실제 프레임 수신이나 제스처 인식 성공을 뜻하지는 않습니다.
 
-새 장치 연결 및 잠자기 복귀 후 필요하면 '제스처 장치 다시 연결'을 선택해 주세요.
+새 장치 연결 및 잠자기 복귀 후 필요하면 'Advanced → Reconnect Gesture Devices'을 선택해 주세요.
 제스처 없이 실행하려면 앱 종료 후 다음 명령을 사용하실 수 있습니다.
 
 ```sh
@@ -179,3 +179,5 @@ Dock에 사용자가 고정한 아이콘으로 실행·재열기하며, 실행 �
 메뉴 막대 아이콘을 기본 클릭하면 아이콘 아래에서 런처가 상단을 기준으로 펼쳐지며, 다시 클릭하면 닫힙니다.
 오른쪽 클릭 또는 Control-클릭하면 기존 관리 옵션 메뉴가 열립니다.
 메뉴 클릭 분기와 상단 배치·전환의 실제 화면 동작은 아직 실기 검증하지 않았습니다.
+
+상태 메뉴는 `Open ~/Apps`, `Advanced`, `Quit MiniLaunch`로 구성합니다. 폴더 열기 이름에는 실제 설정된 경로를 사용하며 홈 디렉터리 안에서는 `~`로 줄여 표시합니다. 접근성 권한, 제스처 상태 및 장치 재연결은 `Advanced` 하위 메뉴에 있습니다. 편집 메뉴를 포함한 모든 메뉴 이름은 영문입니다.
