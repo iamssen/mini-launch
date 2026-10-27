@@ -63,6 +63,8 @@ Xcode 26 이상의 CLI 빌드 도구와 ./build.sh만으로 dist/MiniLaunch.app�
 | DockLocator | 공개 AX API와 화면 좌표 변환 |
 | GestureRecognizer | 하드웨어와 분리한 제스처 상태 머신 |
 | GestureMonitor | 비공개 프레임워크 로딩과 프레임 전달 |
+| SleepController | 공개 IOKit API로 자체 잠자기 방지 요청 생성·해제·실제 상태 조회 |
+| SleepLog | 날짜별 JSONL 기록과 7일 보관 정리 |
 | main | 앱 수명, 메뉴, 기능 연결 |
 | icon.icon | Icon Composer 원본; actool로 Assets.car 및 호환 ICNS 생성 |
 
@@ -78,3 +80,24 @@ Xcode 26 이상의 CLI 빌드 도구와 ./build.sh만으로 dist/MiniLaunch.app�
 - 폴더 열기는 `Open <경로>`로 표시하며 실제 앱 폴더의 홈 디렉터리 부분은 `~`로 줄입니다. Dock 폴더 열기도 같은 이름을 사용합니다.
 - `Advanced` 아래에 `Allow Dock Position Access…`, `Gesture Status…`, `Reconnect Gesture Devices`를 배치합니다.
 - 종료는 `Quit MiniLaunch`이며 편집 메뉴를 포함한 메뉴 이름은 영문으로 표시합니다.
+
+
+## 잠자기 방지
+
+- 상태 메인 메뉴에 `Off`, `Prevent Sleep`, `Prevent Sleep and Display Sleep`을 직접 표시하고 현재 모드를 체크합니다. 모드 선택 항목을 구분선으로 묶으며 하위 메뉴를 사용하지 않습니다.
+- 시스템 잠자기 방지는 `PreventUserIdleSystemSleep`, 화면 꺼짐 방지는 추가로 `PreventUserIdleDisplaySleep` 요청을 사용합니다.
+- 필요한 요청을 먼저 생성하며 생성 실패 시 기존 모드를 유지합니다. 오류 발생 시 실제 보유 요청을 메뉴와 아이콘에 반영하고 알립니다.
+- 활성 상태에서는 기존 3×3 아이콘 오른쪽에 가운데 점과 커피잔을 추가합니다. 비활성 상태에서는 기존 크기로 복귀합니다.
+- 시작 시 꺼짐 상태이며 앱 종료 시 요청을 해제합니다. 사용자 전원 설정을 수정하거나 모드를 영구 저장하지 않습니다.
+- 자동 테스트로 실제 IOKit 요청 전환과 해제를 확인하며, 장시간 유휴 및 실제 메뉴 배치는 실기 검증 대상으로 남깁니다.
+
+
+## Caffein 진단 기록
+
+- `~/Library/Logs/MiniLaunch/caffein-YYYY-MM-DD.jsonl`에 UTC 시각·PID를 포함한 이벤트를 기록합니다.
+- 앱 시작·종료, 모드 변경, 요청 생성·해제·실패·롤백 결과, 시스템 및 화면 잠자기·복귀를 기록합니다.
+- 활성 중에는 약 5분 간격(허용 오차 30초)으로 자체 요청 ID의 속성과 프로세스별 실제 요청을 조회하여 일치 여부를 기록합니다.
+- 조회 실패는 반환 코드와 함께 불일치로 기록하며 요청 없음이나 정상 동작으로 해석하지 않습니다. 자동 복구는 하지 않습니다.
+- 기록할 때 UTC 기준 오늘과 이전 6일에 해당하는 자체 로그를 보관합니다. 다른 파일과 폴더는 삭제하지 않습니다.
+- `Advanced → Open Caffein Logs`로 로그 폴더를 엽니다. 로그 오류는 시스템 로그에 남기고 본 기능은 유지합니다.
+- 주기 검사는 잠자기 중 실행되지 않으며 강제 종료 시 종료 이벤트는 보장하지 않습니다. 실제 전원 동작은 macOS 전원 이력과 대조합니다.

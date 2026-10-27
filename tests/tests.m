@@ -1,6 +1,9 @@
 #import <Cocoa/Cocoa.h>
 #import "AppCatalog.h"
 #import "GestureRecognizer.h"
+#import "SleepController.h"
+#import "SleepLog.h"
+#import <IOKit/pwr_mgt/IOPMLib.h>
 static void check(BOOL condition, NSString *message) {
     if (!condition) { NSLog(@"실패: %@", message); exit(1); }
 }
@@ -96,10 +99,93 @@ static void groupingTests(void) {
     check([AppCatalog groupsForItems:@[]].count == 0, @"빈 목록에는 그룹을 만들지 않습니다.");
     check([AppCatalog groupsForItems:@[other]].count == 1, @"Tag가 없으면 단일 그룹을 유지합니다.");
 }
+static void checkSleepAssertions(MLSleepMode mode) {
+    CFDictionaryRef result = NULL;
+    check(IOPMCopyAssertionsByProcess(&result) == kIOReturnSuccess, @"프로세스별 전원 요청을 조회합니다.");
+    NSDictionary *processes = CFBridgingRelease(result);
+    NSArray *entries = processes[@(NSProcessInfo.processInfo.processIdentifier)];
+    NSMutableSet *types = [NSMutableSet new];
+    NSUInteger count = 0;
+    for (NSDictionary *entry in entries) {
+        if (![entry[(__bridge NSString *)kIOPMAssertionNameKey] isEqualToString:@"MiniLaunch Caffein"]) continue;
+        count++;
+        [types addObject:entry[(__bridge NSString *)kIOPMAssertionTypeKey]];
+        check([entry[(__bridge NSString *)kIOPMAssertionLevelKey] intValue] == kIOPMAssertionLevelOn,
+              @"잠자기 방지 요청이 활성 상태입니다.");
+    }
+    NSMutableSet *wanted = [NSMutableSet new];
+    if (mode != MLSleepModeOff) [wanted addObject:(__bridge NSString *)kIOPMAssertionTypePreventUserIdleSystemSleep];
+    if (mode == MLSleepModeDisplayAndSystem) [wanted addObject:(__bridge NSString *)kIOPMAssertionTypePreventUserIdleDisplaySleep];
+    check(count == wanted.count && [types isEqualToSet:wanted], @"실제 IOKit 요청의 종류와 개수가 선택 모드에 일치합니다.");
+}
+static void sleepTests(void) {
+    SleepController *controller = [SleepController new];
+    check(controller.mode == MLSleepModeOff, @"시작 시 잠자기 방지는 꺼져 있습니다.");
+    checkSleepAssertions(MLSleepModeOff);
+    for (NSNumber *value in @[@(MLSleepModeSystem), @(MLSleepModeSystem), @(MLSleepModeDisplayAndSystem),
+                             @(MLSleepModeDisplayAndSystem), @(MLSleepModeSystem), @(MLSleepModeOff),
+                             @(MLSleepModeOff), @(MLSleepModeDisplayAndSystem)]) {
+        MLSleepMode mode = value.integerValue;
+        NSError *error = nil;
+        check([controller setMode:mode error:&error], [NSString stringWithFormat:@"잠자기 방지 모드를 전환합니다: %@", error]);
+        check(controller.mode == mode, @"전환한 모드를 반환합니다.");
+        checkSleepAssertions(mode);
+        check([controller.diagnosticState[@"matches"] boolValue], @"진단 조회가 실제 요청과 보유 요청의 일치를 확인합니다.");
+    }
+    NSDictionary *owned = controller.diagnosticState[@"owned_assertions"];
+    NSNumber *identifier = owned[(__bridge NSString *)kIOPMAssertionTypePreventUserIdleDisplaySleep];
+    check(IOPMAssertionSetProperty(identifier.unsignedIntValue, kIOPMAssertionLevelKey, (__bridge CFNumberRef)@0) == kIOReturnSuccess,
+          @"요청을 비활성화하여 상태 불일치를 재현합니다.");
+    check(![controller.diagnosticState[@"matches"] boolValue], @"실제 요청이 비활성화되면 불일치를 감지합니다.");
+    controller = nil;
+    checkSleepAssertions(MLSleepModeOff);
+}
+static void sleepLogTests(void) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSURL *root = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString] isDirectory:YES];
+    [fm createDirectoryAtURL:root withIntermediateDirectories:YES attributes:nil error:nil];
+    NSCalendar *calendar = [[NSCalendar alloc] initWithCalendarIdentifier:NSCalendarIdentifierGregorian];
+    calendar.timeZone = [NSTimeZone timeZoneForSecondsFromGMT:0];
+    NSDateFormatter *formatter = [NSDateFormatter new];
+    formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+    formatter.calendar = calendar;
+    formatter.timeZone = calendar.timeZone;
+    formatter.dateFormat = @"yyyy-MM-dd";
+    NSMutableArray<NSURL *> *files = [NSMutableArray new];
+    for (NSNumber *days in @[@0, @-6, @-7, @-30]) {
+        NSDate *date = [calendar dateByAddingUnit:NSCalendarUnitDay value:days.integerValue toDate:NSDate.date options:0];
+        NSURL *file = [root URLByAppendingPathComponent:[NSString stringWithFormat:@"caffein-%@.jsonl", [formatter stringFromDate:date]]];
+        [NSData.data writeToURL:file atomically:YES];
+        [files addObject:file];
+    }
+    NSURL *other = [root URLByAppendingPathComponent:@"notes.txt"];
+    [NSData.data writeToURL:other atomically:YES];
+    SleepLog *log = [[SleepLog alloc] initWithDirectoryURL:root];
+    SleepController *controller = [SleepController new];
+    controller.log = log;
+    check([controller setMode:MLSleepModeSystem error:nil], @"로그를 남기면서 잠자기를 방지합니다.");
+    check([controller setMode:MLSleepModeOff error:nil], @"로그를 남기면서 요청을 해제합니다.");
+    for (NSUInteger i = 0; i < files.count; i++) {
+        check([fm fileExistsAtPath:files[i].path] == (i < 2), @"오늘과 이전 6일의 로그만 보관합니다.");
+    }
+    check([fm fileExistsAtPath:other.path], @"관계없는 파일은 보존합니다.");
+    NSString *text = [NSString stringWithContentsOfURL:files[0] encoding:NSUTF8StringEncoding error:nil];
+    NSMutableArray *events = [NSMutableArray new];
+    for (NSString *line in [text componentsSeparatedByString:@"\n"]) {
+        if (!line.length) continue;
+        NSDictionary *entry = [NSJSONSerialization JSONObjectWithData:[line dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+        check(entry[@"timestamp"] && entry[@"pid"], @"각 JSON 행에 시각과 프로세스 번호를 남깁니다.");
+        [events addObject:entry[@"event"]];
+        if ([entry[@"event"] isEqual:@"mode_applied"]) check([entry[@"matches"] boolValue], @"적용 결과에 실제 요청 검증을 기록합니다.");
+    }
+    check([events isEqualToArray:@[@"mode_requested", @"assertion_create", @"mode_applied", @"mode_requested", @"assertion_release", @"mode_applied"]],
+          @"모드 선택과 요청 생성·해제 및 적용 결과를 순서대로 기록합니다.");
+    [fm removeItemAtURL:root error:nil];
+}
 int main(void) {
     @autoreleasepool {
-        gestureTests(); catalogTests(); groupingTests();
-        puts("통과: 제스처 인식, Finder alias/폴더 및 Tag 그룹 테스트");
+        gestureTests(); catalogTests(); groupingTests(); sleepTests(); sleepLogTests();
+        puts("통과: 제스처 인식, Finder alias/폴더, Tag 그룹, 잠자기 방지 요청 및 로그 테스트");
     }
     return 0;
 }

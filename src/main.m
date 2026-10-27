@@ -2,12 +2,18 @@
 #import <ApplicationServices/ApplicationServices.h>
 #import "LauncherController.h"
 #import "GestureMonitor.h"
+#import "SleepController.h"
+#import "SleepLog.h"
 @interface AppDelegate : NSObject <NSApplicationDelegate>
 @property LauncherController *launcher;
 @property GestureMonitor *gestures;
 @property NSUInteger gestureReconnectGeneration;
 @property NSStatusItem *statusItem;
 @property NSMenu *statusMenu;
+@property SleepController *sleepController;
+@property NSImage *launcherStatusIcon;
+@property SleepLog *sleepLog;
+@property NSTimer *sleepCheckTimer;
 @end
 @implementation AppDelegate
 - (NSURL *)appsDirectoryURL {
@@ -24,12 +30,37 @@
     NSMenuItem *openFolder = [[NSMenuItem alloc] initWithTitle:self.openFolderMenuTitle action:@selector(openFolder:) keyEquivalent:@""];
     openFolder.target = self;
     [appMenu addItem:openFolder];
+    self.sleepController = [SleepController new];
+    NSURL *logs = [NSURL fileURLWithPath:[@"~/Library/Logs/MiniLaunch" stringByExpandingTildeInPath] isDirectory:YES];
+    self.sleepLog = [[SleepLog alloc] initWithDirectoryURL:logs];
+    self.sleepController.log = self.sleepLog;
+    NSDictionary *info = NSBundle.mainBundle.infoDictionary;
+    [self.sleepLog recordEvent:@"app_start" fields:@{@"version": info[@"CFBundleShortVersionString"] ?: @"",
+        @"build": info[@"CFBundleVersion"] ?: @"", @"os": NSProcessInfo.processInfo.operatingSystemVersionString}];
+    [self.sleepLog recordEvent:@"startup_state" fields:self.sleepController.diagnosticState];
+    NSNotificationCenter *powerCenter = NSWorkspace.sharedWorkspace.notificationCenter;
+    for (NSString *name in @[NSWorkspaceWillSleepNotification, NSWorkspaceDidWakeNotification,
+                            NSWorkspaceScreensDidSleepNotification, NSWorkspaceScreensDidWakeNotification]) {
+        [powerCenter addObserver:self selector:@selector(recordPowerEvent:) name:name object:nil];
+    }
+    self.sleepCheckTimer = [NSTimer timerWithTimeInterval:300 target:self selector:@selector(checkSleepState:) userInfo:nil repeats:YES];
+    self.sleepCheckTimer.tolerance = 30;
+    [NSRunLoop.mainRunLoop addTimer:self.sleepCheckTimer forMode:NSRunLoopCommonModes];
+    [appMenu addItem:NSMenuItem.separatorItem];
+    NSArray *sleepTitles = @[@"Off", @"Prevent Sleep", @"Prevent Sleep and Display Sleep"];
+    for (NSUInteger i = 0; i < sleepTitles.count; i++) {
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:sleepTitles[i] action:@selector(selectSleepMode:) keyEquivalent:@""];
+        item.target = self;
+        item.tag = (NSInteger)i;
+        [appMenu addItem:item];
+    }
+    [appMenu addItem:NSMenuItem.separatorItem];
     NSMenuItem *advancedItem = [[NSMenuItem alloc] initWithTitle:@"Advanced" action:nil keyEquivalent:@""];
     NSMenu *advanced = [[NSMenu alloc] initWithTitle:@"Advanced"];
     advancedItem.submenu = advanced;
     [appMenu addItem:advancedItem];
-    NSArray *titles = @[@"Allow Dock Position Access…", @"Gesture Status…", @"Reconnect Gesture Devices"];
-    NSArray *actions = @[@"requestAccessibility:", @"gestureStatus:", @"restartGestures:"];
+    NSArray *titles = @[@"Allow Dock Position Access…", @"Gesture Status…", @"Reconnect Gesture Devices", @"Open Caffein Logs"];
+    NSArray *actions = @[@"requestAccessibility:", @"gestureStatus:", @"restartGestures:", @"openSleepLogs:"];
     for (NSUInteger i = 0; i < titles.count; i++) {
         NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:titles[i] action:NSSelectorFromString(actions[i]) keyEquivalent:@""];
         item.target = self;
@@ -63,9 +94,9 @@
     }];
     statusIcon.template = YES;
     statusIcon.accessibilityDescription = @"MiniLaunch";
-    self.statusItem.button.image = statusIcon;
-    self.statusItem.button.toolTip = @"MiniLaunch";
+    self.launcherStatusIcon = statusIcon;
     self.statusMenu = [appMenu copy];
+    [self updateSleepAppearance];
     self.statusItem.button.target = self;
     self.statusItem.button.action = @selector(statusItemClicked:);
     [self.statusItem.button sendActionOn:NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp];
@@ -85,6 +116,68 @@
         }
     }
     [self.launcher showFromDock:NO];
+}
+- (void)selectSleepMode:(NSMenuItem *)sender {
+    NSError *error = nil;
+    BOOL success = [self.sleepController setMode:(MLSleepMode)sender.tag error:&error];
+    [self updateSleepAppearance];
+    if (!success) {
+        NSAlert *alert = [NSAlert new];
+        alert.messageText = @"잠자기 방지 상태를 변경하지 못했습니다";
+        alert.informativeText = error.localizedDescription ?: @"선택한 모드를 적용할 수 없습니다.";
+        [alert runModal];
+    }
+}
+- (void)checkSleepState:(NSTimer *)timer {
+    if (self.sleepController.mode != MLSleepModeOff) {
+        [self.sleepLog recordEvent:@"periodic_check" fields:self.sleepController.diagnosticState];
+    }
+}
+- (void)recordPowerEvent:(NSNotification *)notification {
+    NSString *observed = [[NSISO8601DateFormatter new] stringFromDate:NSDate.date];
+    // 제스처 활성화 여부와 무관하게 전원 이벤트를 기록합니다.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSMutableDictionary *fields = [self.sleepController.diagnosticState mutableCopy];
+        fields[@"notification"] = notification.name;
+        fields[@"observed_at"] = observed;
+        [self.sleepLog recordEvent:@"power_event" fields:fields];
+    });
+}
+- (void)openSleepLogs:(id)sender {
+    [self.sleepLog recordEvent:@"logs_opened" fields:@{}];
+    [NSWorkspace.sharedWorkspace openURL:self.sleepLog.directoryURL];
+}
+- (void)updateSleepAppearance {
+    MLSleepMode mode = self.sleepController.mode;
+    // 복사한 상태 메뉴와 앱 메뉴 양쪽에 실제 요청 상태를 반영합니다.
+    for (NSMenu *menu in @[NSApp.mainMenu.itemArray.firstObject.submenu, self.statusMenu]) {
+        for (NSMenuItem *item in menu.itemArray) {
+            if (item.action != @selector(selectSleepMode:)) continue;
+            item.state = item.tag == mode ? NSControlStateValueOn : NSControlStateValueOff;
+        }
+    }
+    NSImage *icon = self.launcherStatusIcon;
+    BOOL active = mode != MLSleepModeOff;
+    if (active) {
+        NSImage *launcherIcon = self.launcherStatusIcon;
+        NSImage *cup = [NSImage imageWithSystemSymbolName:@"cup.and.saucer.fill" accessibilityDescription:nil];
+        icon = [NSImage imageWithSize:NSMakeSize(42, 15) flipped:NO drawingHandler:^BOOL(NSRect bounds) {
+            (void)bounds;
+            [launcherIcon drawInRect:NSMakeRect(0, 0, 15, 15)];
+            [NSColor.blackColor setFill];
+            [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(20, 6.5, 2, 2)] fill];
+            [cup drawInRect:NSMakeRect(27, 0, 15, 15)];
+            return YES;
+        }];
+        icon.template = YES;
+    }
+    self.statusItem.length = active ? NSVariableStatusItemLength : NSSquareStatusItemLength;
+    self.statusItem.button.image = icon;
+    NSString *state = mode == MLSleepModeOff ? @"Off" :
+                      mode == MLSleepModeSystem ? @"Prevent Sleep" : @"Prevent Sleep and Display Sleep";
+    NSString *label = [@"MiniLaunch — Caffein: " stringByAppendingString:state];
+    self.statusItem.button.toolTip = label;
+    [self.statusItem.button setAccessibilityLabel:label];
 }
 - (void)statusItemClicked:(NSStatusBarButton *)button {
     NSEvent *event = NSApp.currentEvent;
@@ -145,9 +238,12 @@
 }
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender { return NO; }
 - (void)applicationWillTerminate:(NSNotification *)notification {
+    [self.sleepCheckTimer invalidate];
     ++self.gestureReconnectGeneration;
     [NSWorkspace.sharedWorkspace.notificationCenter removeObserver:self];
     [self.gestures stop];
+    [self.sleepController setMode:MLSleepModeOff error:nil];
+    [self.sleepLog recordEvent:@"app_exit" fields:self.sleepController.diagnosticState];
 }
 @end
 int main(void) {
