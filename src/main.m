@@ -161,12 +161,17 @@
     if (active) {
         NSImage *launcherIcon = self.launcherStatusIcon;
         NSImage *cup = [NSImage imageWithSystemSymbolName:@"cup.and.saucer.fill" accessibilityDescription:nil];
-        icon = [NSImage imageWithSize:NSMakeSize(42, 15) flipped:NO drawingHandler:^BOOL(NSRect bounds) {
-            (void)bounds;
-            [launcherIcon drawInRect:NSMakeRect(0, 0, 15, 15)];
+        cup = [cup imageWithSymbolConfiguration:
+            [NSImageSymbolConfiguration configurationWithPointSize:15 weight:NSFontWeightRegular]];
+        // 잔·받침의 원래 비율을 보존하고, 격자와 점은 기존 크기로 수직 중앙에 둡니다.
+        NSSize cupSize = cup.size;
+        CGFloat height = MAX(15, cupSize.height);
+        icon = [NSImage imageWithSize:NSMakeSize(27 + cupSize.width, height) flipped:NO drawingHandler:^BOOL(NSRect bounds) {
+            CGFloat centerY = NSMidY(bounds);
+            [launcherIcon drawInRect:NSMakeRect(0, centerY - 7.5, 15, 15)];
             [NSColor.blackColor setFill];
-            [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(20, 6.5, 2, 2)] fill];
-            [cup drawInRect:NSMakeRect(27, 0, 15, 15)];
+            [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(20, centerY - 1, 2, 2)] fill];
+            [cup drawInRect:NSMakeRect(27, centerY - cupSize.height / 2, cupSize.width, cupSize.height)];
             return YES;
         }];
         icon.template = YES;
