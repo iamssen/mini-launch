@@ -8,6 +8,7 @@
 @property NSString *problem;
 @end
 @interface AppCatalog : NSObject
++ (BOOL)isProtectedApplicationAtURL:(NSURL *)url;
 + (NSArray<NSArray<MLItem *> *> *)groupsForItems:(NSArray<MLItem *> *)items;
 + (NSArray<MLItem *> *)itemsAtURL:(NSURL *)url error:(NSError **)error;
 @end

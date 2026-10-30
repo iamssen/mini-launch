@@ -1,7 +1,20 @@
 #import "AppCatalog.h"
+#import <sys/stat.h>
 @implementation MLItem
 @end
 @implementation AppCatalog
++ (BOOL)isProtectedApplicationAtURL:(NSURL *)url {
+    if (!url.isFileURL) return NO;
+    NSURL *target = url.URLByResolvingSymlinksInPath.URLByStandardizingPath;
+    NSString *path = target.path;
+    // alias는 호출 시점에 해석되어 있습니다. Safari 등의 심볼릭 링크도 실제 경로로 판별합니다.
+    for (NSString *root in @[@"/System/Applications", @"/System/Library", @"/System/Cryptexes", @"/System/Volumes/Preboot"]) {
+        if ([path isEqualToString:root] || [path hasPrefix:[root stringByAppendingString:@"/"]]) return YES;
+    }
+    // 설치 위치나 Apple의 번들 식별자만으로 삭제 가능 여부를 추측하지 않습니다.
+    struct stat information;
+    return stat(target.fileSystemRepresentation, &information) == 0 && (information.st_flags & SF_RESTRICTED) != 0;
+}
 + (NSArray<MLItem *> *)itemsAtURL:(NSURL *)url error:(NSError **)error {
     NSArray *urls = [[NSFileManager defaultManager] contentsOfDirectoryAtURL:url
         includingPropertiesForKeys:@[NSURLIsAliasFileKey, NSURLIsDirectoryKey, NSURLIsApplicationKey, NSURLTagNamesKey]

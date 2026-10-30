@@ -1,11 +1,76 @@
 #import <Cocoa/Cocoa.h>
 #import "AppCatalog.h"
+#import "RecentDirectories.h"
+#import <sqlite3.h>
 #import "GestureRecognizer.h"
 #import "SleepController.h"
 #import "SleepLog.h"
 #import <IOKit/pwr_mgt/IOPMLib.h>
 static void check(BOOL condition, NSString *message) {
     if (!condition) { NSLog(@"실패: %@", message); exit(1); }
+}
+static void setRecentValue(sqlite3 *db, NSString *value) {
+    sqlite3_stmt *statement = NULL;
+    check(sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO ItemTable VALUES ('history.recentlyOpenedPathsList', ?)", -1, &statement, NULL) == SQLITE_OK,
+          @"최근 목록 저장문을 준비합니다.");
+    sqlite3_bind_text(statement, 1, value.UTF8String, -1, SQLITE_TRANSIENT);
+    check(sqlite3_step(statement) == SQLITE_DONE, @"검증용 최근 목록을 저장합니다.");
+    sqlite3_finalize(statement);
+}
+static void waitForRecent(RecentDirectories *store) {
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:3];
+    while (store.refreshing && deadline.timeIntervalSinceNow > 0)
+        [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.005]];
+    check(!store.refreshing, @"최근 폴더 비동기 조회가 완료됩니다.");
+}
+static void recentDirectoryTests(void) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSURL *root = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString] isDirectory:YES];
+    NSURL *first = [root URLByAppendingPathComponent:@"한글 폴더 '첫째'" isDirectory:YES];
+    NSURL *second = [root URLByAppendingPathComponent:@"둘째" isDirectory:YES];
+    [fm createDirectoryAtURL:first withIntermediateDirectories:YES attributes:nil error:nil];
+    [fm createDirectoryAtURL:second withIntermediateDirectories:YES attributes:nil error:nil];
+    NSURL *file = [root URLByAppendingPathComponent:@"메모.txt"];
+    [NSData.data writeToURL:file atomically:YES];
+    NSURL *database = [root URLByAppendingPathComponent:@"state.vscdb"];
+    sqlite3 *db = NULL;
+    check(sqlite3_open(database.fileSystemRepresentation, &db) == SQLITE_OK, @"검증용 SQLite 저장소를 엽니다.");
+    check(sqlite3_exec(db, "PRAGMA journal_mode=WAL; CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)", NULL, NULL, NULL) == SQLITE_OK,
+          @"Cursor와 같은 WAL 저장소를 만듭니다.");
+    NSArray *entries = @[@{@"folderUri": first.absoluteString}, @{@"folderUri": @"vscode-remote://ssh-remote+test/home/project"},
+        @{@"fileUri": file.absoluteString}, @{@"folderUri": file.absoluteString},
+        @{@"folderUri": [root URLByAppendingPathComponent:@"없는 폴더"].absoluteString},
+        @{@"folderUri": first.absoluteString}, @{@"folderUri": second.absoluteString},
+        @{@"folderUri": @123}, NSNull.null];
+    NSData *json = [NSJSONSerialization dataWithJSONObject:@{@"entries": entries} options:0 error:nil];
+    setRecentValue(db, [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding]);
+    NSError *error = nil;
+    NSArray *directories = [RecentDirectories directoriesAtDatabaseURL:database error:&error];
+    check(!error && [directories isEqualToArray:@[first, second]], @"WAL의 최근 순서와 한글·공백을 보존하고 파일·원격·중복·잘못된 항목을 제외합니다.");
+    RecentDirectories *store = [[RecentDirectories alloc] initWithDatabaseURL:database];
+    __block NSUInteger notifications = 0;
+    store.didRefresh = ^{ check(NSThread.isMainThread, @"갱신 알림은 메인 스레드로 전달합니다."); notifications++; };
+    [store refresh]; [store refresh];
+    check(store.refreshing && store.directories.count == 0, @"갱신 요청은 캐시를 즉시 반환하고 중복 조회를 합칩니다.");
+    waitForRecent(store);
+    check([store.directories isEqualToArray:directories] && notifications == 1, @"비동기 조회 후 캐시를 교체합니다.");
+    [store refresh]; waitForRecent(store);
+    check(notifications == 1, @"같은 목록은 화면 갱신을 요청하지 않습니다.");
+    setRecentValue(db, @"{잘못된 JSON");
+    [store refresh]; waitForRecent(store);
+    check([store.directories isEqualToArray:directories] && notifications == 1, @"조회 결과 해석 실패 시 기존 캐시를 유지합니다.");
+    setRecentValue(db, @"{\"entries\": {}}");
+    error = nil;
+    check(![RecentDirectories directoriesAtDatabaseURL:database error:&error] && error, @"저장 형식 변경과 빈 목록을 구별합니다.");
+    setRecentValue(db, @"{\"entries\": []}");
+    [store refresh]; waitForRecent(store);
+    check(store.directories.count == 0 && notifications == 2, @"정상 조회한 빈 목록은 캐시도 비웁니다.");
+    sqlite3_close(db);
+    NSURL *missing = [root URLByAppendingPathComponent:@"없는 저장소"];
+    error = nil;
+    check(![RecentDirectories directoriesAtDatabaseURL:missing error:&error] && error, @"저장소 부재를 오류로 구분합니다.");
+    check(![fm fileExistsAtPath:missing.path], @"읽기 전용 조회는 없는 저장소를 만들지 않습니다.");
+    [fm removeItemAtURL:root error:nil];
 }
 static void gestureTests(void) {
     for (int count = 4; count <= 5; count++) {
@@ -81,6 +146,32 @@ static void catalogTests(void) {
     error = nil;
     [AppCatalog itemsAtURL:[root URLByAppendingPathComponent:@"없음"] error:&error];
     check(error != nil, @"읽기 실패와 빈 폴더를 구별합니다.");
+    [fm removeItemAtURL:root error:nil];
+}
+static void protectedApplicationTests(void) {
+    for (NSString *path in @[@"/System/Applications/Utilities/Activity Monitor.app",
+                             @"/System/Library/CoreServices/Finder.app",
+                             @"/System/Cryptexes/App/System/Applications/Safari.app",
+                             @"/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app"]) {
+        check([AppCatalog isProtectedApplicationAtURL:[NSURL fileURLWithPath:path]], @"시스템 앱과 Cryptex 영역의 앱을 제외합니다.");
+    }
+    check(![AppCatalog isProtectedApplicationAtURL:[NSURL fileURLWithPath:@"/System/Applications-Custom/일반.app"]],
+          @"이름의 접두사만 같은 경로를 시스템 영역으로 잘못 분류하지 않습니다.");
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSURL *root = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString] isDirectory:YES];
+    [fm createDirectoryAtURL:root withIntermediateDirectories:YES attributes:nil error:nil];
+    NSURL *regular = [root URLByAppendingPathComponent:@"일반.app" isDirectory:YES];
+    [fm createDirectoryAtURL:regular withIntermediateDirectories:NO attributes:nil error:nil];
+    check(![AppCatalog isProtectedApplicationAtURL:regular], @"일반 설치 앱에는 제거 메뉴를 허용합니다.");
+    NSURL *link = [root URLByAppendingPathComponent:@"시스템 앱 링크.app"];
+    NSURL *system = [NSURL fileURLWithPath:@"/System/Applications/Utilities/Activity Monitor.app"];
+    if ([fm fileExistsAtPath:system.path]) {
+        check([fm createSymbolicLinkAtURL:link withDestinationURL:system error:nil], @"시스템 앱의 검증용 링크를 만듭니다.");
+        check([AppCatalog isProtectedApplicationAtURL:link], @"일반 위치의 링크도 시스템 앱 실체를 판별합니다.");
+    }
+    NSURL *xcode = [NSURL fileURLWithPath:@"/Applications/Xcode.app"];
+    if ([fm fileExistsAtPath:xcode.path])
+        check(![AppCatalog isProtectedApplicationAtURL:xcode], @"별도로 설치한 Apple 앱인 Xcode를 시스템 앱으로 취급하지 않습니다.");
     [fm removeItemAtURL:root error:nil];
 }
 static MLItem *taggedItem(NSString *name, NSArray *tags) {
@@ -184,8 +275,8 @@ static void sleepLogTests(void) {
 }
 int main(void) {
     @autoreleasepool {
-        gestureTests(); catalogTests(); groupingTests(); sleepTests(); sleepLogTests();
-        puts("통과: 제스처 인식, Finder alias/폴더, Tag 그룹, 잠자기 방지 요청 및 로그 테스트");
+        recentDirectoryTests(); gestureTests(); catalogTests(); protectedApplicationTests(); groupingTests(); sleepTests(); sleepLogTests();
+        puts("통과: Cursor 최근 폴더와 비동기 캐시, 제스처 인식, Finder alias/폴더, Tag 그룹, 잠자기 방지 요청 및 로그 테스트");
     }
     return 0;
 }

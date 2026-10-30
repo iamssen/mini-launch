@@ -77,16 +77,46 @@
 }
 @end
 
+@implementation LauncherActionButton
+- (void)rightMouseDown:(NSEvent *)event {
+    if (self.menu) [NSMenu popUpContextMenu:self.menu withEvent:event forView:self];
+    else [super rightMouseDown:event];
+}
+- (void)mouseDown:(NSEvent *)event {
+    if (event.modifierFlags & NSEventModifierFlagControl) [self rightMouseDown:event];
+    else [super mouseDown:event];
+}
+- (void)setSelected:(BOOL)selected {
+    _selected = selected;
+    self.needsDisplay = YES;
+}
+@end
+
+@implementation LauncherDirectoryButton
+- (BOOL)isFlipped { return YES; }
+- (void)drawRect:(NSRect)dirtyRect {
+    (void)dirtyRect;
+    if (self.selected || self.highlighted) {
+        [[NSColor colorWithWhite:1 alpha:self.highlighted ? 0.22 : 0.13] setFill];
+        [[NSBezierPath bezierPathWithRoundedRect:self.bounds xRadius:6 yRadius:6] fill];
+    }
+    [self.image drawInRect:NSMakeRect(6, 6, 16, 16) fromRect:NSZeroRect
+        operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:nil];
+    NSMutableParagraphStyle *paragraph = [NSMutableParagraphStyle new];
+    paragraph.lineBreakMode = NSLineBreakByTruncatingMiddle;
+    [self.title drawInRect:NSMakeRect(28, 6, MAX(0, NSWidth(self.bounds) - 34), 17)
+        withAttributes:@{NSFontAttributeName: [NSFont systemFontOfSize:13],
+                         NSForegroundColorAttributeName: NSColor.whiteColor,
+                         NSParagraphStyleAttributeName: paragraph}];
+}
+@end
+
 @implementation LauncherIconButton
 - (instancetype)initWithFrame:(NSRect)frame {
     if (!(self = [super initWithFrame:frame])) return nil;
     self.bordered = NO;
     self.focusRingType = NSFocusRingTypeNone;
     return self;
-}
-- (void)setSelected:(BOOL)selected {
-    _selected = selected;
-    self.needsDisplay = YES;
 }
 - (void)drawRect:(NSRect)dirtyRect {
     (void)dirtyRect;

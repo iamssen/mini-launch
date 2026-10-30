@@ -2,6 +2,7 @@
 #import "AppCatalog.h"
 #import "DockLocator.h"
 #import "LauncherAppearance.h"
+#import "RecentDirectories.h"
 #import <QuartzCore/QuartzCore.h>
 #import <CoreImage/CoreImage.h>
 
@@ -23,14 +24,19 @@ static const CGFloat GroupGap = 20;
 - (BOOL)isOpaque { return NO; }
 @end
 
-@interface LauncherController () <NSWindowDelegate>
+@interface LauncherController () <NSWindowDelegate, NSMenuDelegate>
 @property LauncherPanel *panel;
 @property LauncherBackdrop *backdrop;
 @property NSURL *root;
 @property NSMutableArray<NSURL *> *path;
 @property NSArray<MLItem *> *items;
 @property NSArray<NSArray<MLItem *> *> *groups;
-@property NSMutableArray<LauncherIconButton *> *buttons;
+@property NSMutableArray<LauncherActionButton *> *buttons;
+@property RecentDirectories *recentDirectories;
+@property NSArray<NSURL *> *directoryURLs;
+@property FlippedView *directoryList;
+@property BOOL entering;
+@property BOOL trackingMenu;
 @property NSTextField *titleLabel;
 @property NSTextField *statusLabel;
 @property NSButton *back;
@@ -53,6 +59,10 @@ static const CGFloat GroupGap = 20;
 - (instancetype)initWithRoot:(NSURL *)root {
     if (!(self = [super init])) return nil;
     _root = root;
+    _directoryURLs = @[];
+    NSURL *database = [NSURL fileURLWithPath:[NSHomeDirectory() stringByAppendingPathComponent:
+        @"Library/Application Support/Cursor/User/globalStorage/state.vscdb"]];
+    _recentDirectories = [[RecentDirectories alloc] initWithDatabaseURL:database];
     _path = [NSMutableArray arrayWithObject:root];
     _panel = [[LauncherPanel alloc] initWithContentRect:NSMakeRect(0, 0, 800, 442)
         styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
@@ -94,6 +104,8 @@ static const CGFloat GroupGap = 20;
     _grid = [FlippedView new];
     _scroll.documentView = _grid;
     [_backdrop.effect addSubview:_scroll];
+    _directoryList = [FlippedView new];
+    [_backdrop.effect addSubview:_directoryList];
     _statusLabel = [NSTextField labelWithString:@""];
     _statusLabel.font = [NSFont systemFontOfSize:11];
     _statusLabel.textColor = NSColor.whiteColor;
@@ -108,8 +120,10 @@ static const CGFloat GroupGap = 20;
     }];
     _clickMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown handler:^(NSEvent *e) {
         (void)e;
-        [weakSelf hide];
+        if (!weakSelf.trackingMenu) [weakSelf hide];
     }];
+    _recentDirectories.didRefresh = ^{ [weakSelf applyRecentDirectories]; };
+    [_recentDirectories refresh];
     return self;
 }
 - (BOOL)visible { return self.panel.isVisible && !self.hiding; }
@@ -157,7 +171,21 @@ static const CGFloat GroupGap = 20;
     [self.panel makeKeyAndOrderFront:nil];
     [self.panel makeFirstResponder:self.panel];
     [self.panel invalidateShadow];
-    if (!alreadyVisible) [self animateEntrance];
+    if (!alreadyVisible) {
+        self.entering = YES;
+        [self animateEntrance];
+        NSUInteger generation = self.transitionGeneration;
+        NSTimeInterval duration = NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion ? 0.07 : 0.14;
+        __weak typeof(self) weakSelf = self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(duration * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (weakSelf.transitionGeneration != generation) return;
+            weakSelf.entering = NO;
+            [weakSelf applyRecentDirectories];
+        });
+    } else {
+        self.entering = NO;
+    }
+    [self.recentDirectories refresh];
 }
 - (CGFloat)gridHeight {
     CGFloat height = 0;
@@ -165,16 +193,53 @@ static const CGFloat GroupGap = 20;
         height += ceil((double)group.count / self.columns) * CellHeight;
     return MAX(CellHeight, height + MAX(0, (NSInteger)self.groups.count - 1) * GroupGap);
 }
+- (NSArray<NSValue *> *)directoryFramesForWidth:(CGFloat)width {
+    if (self.path.count != 1) return @[];
+    NSMutableArray *frames = [NSMutableArray array];
+    CGFloat x = 0, y = 0;
+    for (NSURL *url in self.directoryURLs) {
+        CGFloat textWidth = [url.lastPathComponent sizeWithAttributes:@{NSFontAttributeName: [NSFont systemFontOfSize:13]}].width;
+        CGFloat itemWidth = MIN(width, ceil(textWidth) + 36);
+        if (x > 0 && x + itemWidth > width) { x = 0; y += 32; }
+        [frames addObject:[NSValue valueWithRect:NSMakeRect(x, y, itemWidth, 28)]];
+        x += itemWidth + 8;
+    }
+    // 마지막 줄을 포함해 각 줄의 아이콘·이름 묶음을 가운데 배치합니다.
+    for (NSUInteger start = 0; start < frames.count;) {
+        NSUInteger end = start + 1;
+        CGFloat rowY = [frames[start] rectValue].origin.y;
+        while (end < frames.count && [frames[end] rectValue].origin.y == rowY) end++;
+        CGFloat offset = floor((width - NSMaxX([frames[end - 1] rectValue])) / 2);
+        for (NSUInteger i = start; i < end; i++)
+            frames[i] = [NSValue valueWithRect:NSOffsetRect([frames[i] rectValue], offset, 0)];
+        start = end;
+    }
+    return frames;
+}
+- (CGFloat)directoryHeightForWidth:(CGFloat)width {
+    NSArray<NSValue *> *frames = [self directoryFramesForWidth:width];
+    return frames.count ? NSMaxY(frames.lastObject.rectValue) + 16 : 0;
+}
+- (void)applyRecentDirectories {
+    // 조작 중에는 항목 이동을 피하고 다음 열기에서 최신 캐시를 사용합니다.
+    if (!self.visible || self.entering || self.trackingMenu || self.selected >= 0 || self.path.count != 1) return;
+    if ([self.directoryURLs isEqualToArray:self.recentDirectories.directories]) return;
+    self.directoryURLs = self.recentDirectories.directories;
+    [self layout];
+    [self renderItems];
+}
 - (void)layout {
     NSRect area = self.availableFrame;
     NSInteger capacity = MAX(1, MIN(6, (NSInteger)((NSWidth(area) - SideInset * 2) / CellWidth)));
     self.columns = MAX(1, MIN(capacity, (NSInteger)self.items.count));
-    if (!self.items.count) self.columns = MIN(3, capacity);
+    if (!self.items.count || (self.path.count == 1 && self.directoryURLs.count))
+        self.columns = MAX(self.columns, MIN(3, capacity));
     CGFloat width = MIN(NSWidth(area), self.columns * CellWidth + SideInset * 2);
     BOOL tail = self.dockPresentation && self.bottomDock;
     CGFloat bottom = tail ? 12 : 0;
     CGFloat topInset = self.path.count > 1 ? 44 : 16;
-    CGFloat height = MIN(NSHeight(area), topInset + [self gridHeight] + 10 + bottom);
+    CGFloat directoryHeight = [self directoryHeightForWidth:width - SideInset * 2];
+    CGFloat height = MIN(NSHeight(area), topInset + [self gridHeight] + directoryHeight + 10 + bottom);
     NSRect frame = NSMakeRect(NSMidX(area) - width / 2, NSMidY(area) - height / 2, width, height);
     if (self.dockPresentation && !NSIsEmptyRect(self.dockIcon)) {
         if (tail) {
@@ -199,7 +264,9 @@ static const CGFloat GroupGap = 20;
     [self.backdrop updateShape];
     self.titleLabel.frame = NSMakeRect(52, height - 30, width - 104, 20);
     self.back.frame = NSMakeRect(17, height - 35, 28, 28);
-    self.scroll.frame = NSMakeRect(SideInset, bottom + 10, width - SideInset * 2, height - topInset - 10 - bottom);
+    self.directoryList.frame = NSMakeRect(SideInset, bottom + 10, width - SideInset * 2, directoryHeight);
+    self.scroll.frame = NSMakeRect(SideInset, bottom + 10 + directoryHeight, width - SideInset * 2,
+        MAX(0, height - topInset - 10 - bottom - directoryHeight));
     self.statusLabel.frame = NSMakeRect(24, bottom + 2, width - 48, 16);
 }
 // 메뉴 막대 또는 Dock 위치를 확대·축소의 기준으로 삼습니다.
@@ -279,6 +346,7 @@ static const CGFloat GroupGap = 20;
 - (void)hide {
     if (!self.panel.isVisible || self.hiding) return;
     self.hiding = YES;
+    self.entering = NO;
     NSUInteger generation = ++self.transitionGeneration;
     CALayer *layer = self.backdrop.layer;
     CALayer *presented = layer.presentationLayer ?: layer;
@@ -320,12 +388,16 @@ static const CGFloat GroupGap = 20;
     [CATransaction commit];
     if (!reduced) [self animateBlurFrom:currentBlur to:6 duration:group.duration];
 }
-- (void)windowDidResignKey:(NSNotification *)notification { [self hide]; }
+- (void)windowDidResignKey:(NSNotification *)notification {
+    (void)notification;
+    if (!self.trackingMenu) [self hide];
+}
 - (void)showError:(NSString *)message {
     self.statusLabel.stringValue = message;
     self.statusLabel.hidden = NO;
 }
 - (void)reload {
+    self.directoryURLs = self.recentDirectories.directories;
     NSError *error = nil;
     NSArray *catalog = [AppCatalog itemsAtURL:self.path.lastObject error:&error];
     self.groups = [AppCatalog groupsForItems:catalog];
@@ -343,6 +415,7 @@ static const CGFloat GroupGap = 20;
 }
 - (void)renderItems {
     for (NSView *view in self.grid.subviews.copy) [view removeFromSuperview];
+    for (NSView *view in self.directoryList.subviews.copy) [view removeFromSuperview];
     self.buttons = [NSMutableArray array];
     CGFloat width = self.scroll.contentSize.width;
     CGFloat cell = width / self.columns;
@@ -365,6 +438,7 @@ static const CGFloat GroupGap = 20;
         button.image = [NSWorkspace.sharedWorkspace iconForFile:(item.targetURL ?: item.sourceURL).path];
         button.target = self;
         button.action = @selector(choose:);
+        button.menu = [self menuForURL:item.targetURL directory:item.folder valid:!item.problem];
         button.tag = index++;
         button.toolTip = item.problem ?: item.targetURL.path;
         button.accessibilityLabel = item.name;
@@ -381,19 +455,47 @@ static const CGFloat GroupGap = 20;
         empty.frame = NSMakeRect(16, 34, width - 32, 64);
         [self.grid addSubview:empty];
     }
+    NSArray<NSValue *> *frames = [self directoryFramesForWidth:NSWidth(self.directoryList.bounds)];
+    if (frames.count) {
+        NSBox *separator = [[NSBox alloc] initWithFrame:NSMakeRect(8, 4, width - 16, 1)];
+        separator.boxType = NSBoxSeparator;
+        [self.directoryList addSubview:separator];
+    }
+    for (NSUInteger i = 0; i < frames.count; i++) {
+        NSURL *url = self.directoryURLs[i];
+        NSRect frame = NSOffsetRect(frames[i].rectValue, 0, 16);
+        LauncherDirectoryButton *button = [[LauncherDirectoryButton alloc] initWithFrame:frame];
+        button.bordered = NO;
+        button.focusRingType = NSFocusRingTypeNone;
+        button.title = url.lastPathComponent;
+        button.image = [NSWorkspace.sharedWorkspace iconForFile:url.path];
+        button.toolTip = url.path;
+        button.accessibilityLabel = [NSString stringWithFormat:@"Cursor로 열기: %@", url.lastPathComponent];
+        button.target = self;
+        button.action = @selector(choose:);
+        button.tag = self.buttons.count;
+        button.menu = [self menuForURL:url directory:YES valid:YES];
+        [self.directoryList addSubview:button];
+        [self.buttons addObject:button];
+    }
     [self.grid scrollPoint:NSZeroPoint];
 }
 - (void)updateSelection {
-    [self.buttons enumerateObjectsUsingBlock:^(LauncherIconButton *button, NSUInteger idx, BOOL *stop) {
+    [self.buttons enumerateObjectsUsingBlock:^(LauncherActionButton *button, NSUInteger idx, BOOL *stop) {
         (void)stop;
         button.selected = (NSInteger)idx == self.selected;
     }];
-    if (self.selected >= 0 && self.selected < (NSInteger)self.buttons.count)
+    if (self.selected >= 0 && self.selected < (NSInteger)self.items.count)
         [self.grid scrollRectToVisible:self.buttons[self.selected].frame];
 }
 - (void)choose:(NSButton *)sender { self.selected = sender.tag; [self activateSelection]; }
 - (void)activateSelection {
-    if (self.selected < 0 || self.selected >= (NSInteger)self.items.count) return;
+    if (self.selected < 0 || self.selected >= (NSInteger)self.buttons.count) return;
+    if (self.selected >= (NSInteger)self.items.count) {
+        NSURL *url = self.directoryURLs[self.selected - self.items.count];
+        [self openURL:url withApplicationIdentifier:@"com.todesktop.230313mzl4w4u92"];
+        return;
+    }
     MLItem *item = self.items[self.selected];
     if (item.problem) { [self showError:item.problem]; NSBeep(); return; }
     if (item.folder) {
@@ -402,6 +504,76 @@ static const CGFloat GroupGap = 20;
     if ([NSWorkspace.sharedWorkspace openURL:item.targetURL]) [self hide];
     else { [self showError:@"앱을 열지 못했습니다. Finder에서 대상을 확인해 주세요."]; NSBeep(); }
 }
+- (NSRect)navigationRectForButton:(NSView *)button {
+    // 앱 Grid의 스크롤 위치에 관계없이 논리적인 행 순서로 탐색합니다.
+    return button.superview == self.grid ? button.frame : NSOffsetRect(button.frame, 0, [self gridHeight]);
+}
+- (NSMenu *)menuForURL:(NSURL *)url directory:(BOOL)directory valid:(BOOL)valid {
+    NSMenu *menu = [NSMenu new];
+    menu.autoenablesItems = NO;
+    menu.delegate = self;
+    NSMenuItem *reveal = [menu addItemWithTitle:@"Reveal in Finder" action:@selector(revealItem:) keyEquivalent:@""];
+    reveal.target = self;
+    reveal.representedObject = url;
+    reveal.enabled = valid && url != nil;
+    if (directory) {
+        NSMenuItem *open = [menu addItemWithTitle:@"Open in Finder" action:@selector(openFolder:) keyEquivalent:@""];
+        open.target = self;
+        open.representedObject = url;
+        open.enabled = valid && url != nil;
+    }
+    if (!directory && [AppCatalog isProtectedApplicationAtURL:url]) return menu;
+    NSString *identifier = directory ? @"com.googlecode.iterm2" : @"net.freemacsoft.AppCleaner";
+    NSMenuItem *external = [menu addItemWithTitle:directory ? @"Open in iTerm" : @"Uninstall with AppCleaner…"
+        action:@selector(openExternalItem:) keyEquivalent:@""];
+    external.target = self;
+    external.representedObject = valid && url ? @{@"url": url, @"application": identifier} : nil;
+    external.enabled = external.representedObject != nil;
+    return menu;
+}
+- (void)menuWillOpen:(NSMenu *)menu {
+    self.trackingMenu = YES;
+    // 표시 경로에서는 LaunchServices 조회를 하지 않고 메뉴를 열 때 확인합니다.
+    for (NSMenuItem *item in menu.itemArray) {
+        if ([item.representedObject isKindOfClass:NSDictionary.class]) {
+            NSString *identifier = item.representedObject[@"application"];
+            item.enabled = [NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:identifier] != nil;
+        }
+    }
+}
+- (void)menuDidClose:(NSMenu *)menu {
+    (void)menu;
+    self.trackingMenu = NO;
+    // 메뉴 닫힘 뒤의 실행 액션이 먼저 처리되도록 다음 메인 큐 순서로 미룹니다.
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf applyRecentDirectories]; });
+}
+- (void)revealItem:(NSMenuItem *)sender {
+    [self hide];
+    [NSWorkspace.sharedWorkspace activateFileViewerSelectingURLs:@[sender.representedObject]];
+}
+- (void)openFolder:(NSMenuItem *)sender {
+    [self openURL:sender.representedObject withApplicationIdentifier:@"com.apple.finder"];
+}
+- (void)openExternalItem:(NSMenuItem *)sender {
+    if ([sender.representedObject[@"application"] isEqualToString:@"net.freemacsoft.AppCleaner"] &&
+        [AppCatalog isProtectedApplicationAtURL:sender.representedObject[@"url"]]) return;
+    [self openURL:sender.representedObject[@"url"] withApplicationIdentifier:sender.representedObject[@"application"]];
+}
+- (void)openURL:(NSURL *)url withApplicationIdentifier:(NSString *)identifier {
+    NSURL *application = [NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:identifier];
+    if (!application) { [self showError:@"대상 앱이 설치되어 있지 않습니다." ]; NSBeep(); return; }
+    NSWorkspaceOpenConfiguration *configuration = [NSWorkspaceOpenConfiguration configuration];
+    __weak typeof(self) weakSelf = self;
+    [NSWorkspace.sharedWorkspace openURLs:@[url] withApplicationAtURL:application configuration:configuration
+        completionHandler:^(NSRunningApplication *app, NSError *error) {
+            (void)app;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (error) [weakSelf showError:[NSString stringWithFormat:@"폴더 또는 앱을 열지 못했습니다: %@", error.localizedDescription]];
+                else [weakSelf hide];
+            });
+        }];
+}
 - (void)goBack:(id)sender {
     if (self.path.count <= 1) return;
     [self.path removeLastObject]; [self reload];
@@ -409,11 +581,13 @@ static const CGFloat GroupGap = 20;
 - (BOOL)handleKey:(NSEvent *)event {
     BOOL command = (event.modifierFlags & NSEventModifierFlagCommand) != 0;
     if (command && event.keyCode == 126) { [self goBack:nil]; return YES; }
-    if (command && [event.charactersIgnoringModifiers.lowercaseString isEqualToString:@"r"]) { [self reload]; return YES; }
+    if (command && [event.charactersIgnoringModifiers.lowercaseString isEqualToString:@"r"]) {
+        [self reload]; [self.recentDirectories refresh]; return YES;
+    }
     if (command) return NO;
     if (event.keyCode == 53) { [self hide]; return YES; }
     if (event.keyCode == 36 || event.keyCode == 76) {
-        if (self.selected < 0 && self.items.count) self.selected = 0;
+        if (self.selected < 0 && self.buttons.count) self.selected = 0;
         [self activateSelection]; return YES;
     }
     NSInteger delta = 0;
@@ -422,15 +596,15 @@ static const CGFloat GroupGap = 20;
         case 125: delta = self.columns; break; case 126: delta = -self.columns; break;
         default: return NO;
     }
-    if (self.items.count) {
+    if (self.buttons.count) {
         if (self.selected < 0) self.selected = 0;
         else if (event.keyCode == 125 || event.keyCode == 126) {
             // 그룹의 마지막 줄이 짧아도 바로 위/아래 줄의 가까운 열로 이동합니다.
-            NSRect current = self.buttons[self.selected].frame;
+            NSRect current = [self navigationRectForButton:self.buttons[self.selected]];
             CGFloat bestY = CGFLOAT_MAX, bestX = CGFLOAT_MAX;
             NSInteger next = self.selected;
             for (NSUInteger i = 0; i < self.buttons.count; i++) {
-                NSRect candidate = self.buttons[i].frame;
+                NSRect candidate = [self navigationRectForButton:self.buttons[i]];
                 CGFloat dy = (NSMinY(candidate) - NSMinY(current)) * (event.keyCode == 125 ? 1 : -1);
                 CGFloat dx = fabs(NSMidX(candidate) - NSMidX(current));
                 if (dy > 0 && (dy < bestY || (dy == bestY && dx < bestX))) {
@@ -438,7 +612,7 @@ static const CGFloat GroupGap = 20;
                 }
             }
             self.selected = next;
-        } else self.selected = MAX(0, MIN((NSInteger)self.items.count - 1, self.selected + delta));
+        } else self.selected = MAX(0, MIN((NSInteger)self.buttons.count - 1, self.selected + delta));
         [self updateSelection];
     }
     return YES;
