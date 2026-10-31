@@ -3,6 +3,7 @@
 #import "DockLocator.h"
 #import "LauncherAppearance.h"
 #import "RecentDirectories.h"
+#import "FolderIcon.h"
 #import <QuartzCore/QuartzCore.h>
 #import <CoreImage/CoreImage.h>
 
@@ -436,6 +437,12 @@ static const CGFloat GroupGap = 20;
             (idx % self.columns) * cell + 3, groupY + (idx / self.columns) * CellHeight, cell - 6, 122)];
         button.title = item.name;
         button.image = [NSWorkspace.sharedWorkspace iconForFile:(item.targetURL ?: item.sourceURL).path];
+        __weak LauncherIconButton *weakButton = button;
+        MLLoadFolderIcon(item.targetURL ?: item.sourceURL, 96, self.panel.backingScaleFactor, ^(NSImage *image) {
+            LauncherIconButton *currentButton = weakButton;
+            currentButton.image = image;
+            currentButton.needsDisplay = YES;
+        });
         button.target = self;
         button.action = @selector(choose:);
         button.menu = [self menuForURL:item.targetURL directory:item.folder valid:!item.problem];
@@ -469,6 +476,12 @@ static const CGFloat GroupGap = 20;
         button.focusRingType = NSFocusRingTypeNone;
         button.title = url.lastPathComponent;
         button.image = [NSWorkspace.sharedWorkspace iconForFile:url.path];
+        __weak LauncherDirectoryButton *weakButton = button;
+        MLLoadFolderIcon(url, 16, self.panel.backingScaleFactor, ^(NSImage *image) {
+            LauncherDirectoryButton *currentButton = weakButton;
+            currentButton.image = image;
+            currentButton.needsDisplay = YES;
+        });
         button.toolTip = url.path;
         button.accessibilityLabel = [NSString stringWithFormat:@"Cursor로 열기: %@", url.lastPathComponent];
         button.target = self;
