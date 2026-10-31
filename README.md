@@ -1,3 +1,5 @@
+![screenshot](screenshot.webp)
+
 # MiniLaunch
 
 `~/Apps`에 정리한 앱을 반투명 Grid로 여는 macOS 런처입니다.
