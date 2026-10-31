@@ -158,6 +158,7 @@
     }
     NSImage *icon = self.launcherStatusIcon;
     BOOL active = mode != MLSleepModeOff;
+    BOOL displaySleepPrevented = mode == MLSleepModeDisplayAndSystem;
     if (active) {
         NSImage *launcherIcon = self.launcherStatusIcon;
         NSImage *cup = [NSImage imageWithSystemSymbolName:@"cup.and.saucer.fill" accessibilityDescription:nil];
@@ -171,13 +172,23 @@
             [launcherIcon drawInRect:NSMakeRect(0, centerY - 7.5, 15, 15)];
             [NSColor.blackColor setFill];
             [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(20, centerY - 1, 2, 2)] fill];
-            [cup drawInRect:NSMakeRect(27, centerY - cupSize.height / 2, cupSize.width, cupSize.height)];
+            NSRect cupRect = NSMakeRect(27, centerY - cupSize.height / 2, cupSize.width, cupSize.height);
+            [cup drawInRect:cupRect];
+            if (displaySleepPrevented) {
+                // 비템플릿 이미지에서도 격자와 구분점은 현재 메뉴 막대의 글자색을 따릅니다.
+                [NSColor.labelColor setFill];
+                NSRectFillUsingOperation(bounds, NSCompositingOperationSourceIn);
+                // 커피잔 픽셀에만 직접 경고 색상을 입힙니다.
+                [[NSColor colorWithSRGBRed:1 green:0.15 blue:0.2 alpha:1] setFill];
+                NSRectFillUsingOperation(cupRect, NSCompositingOperationSourceAtop);
+            }
             return YES;
         }];
-        icon.template = YES;
+        icon.template = !displaySleepPrevented;
     }
     self.statusItem.length = active ? NSVariableStatusItemLength : NSSquareStatusItemLength;
     self.statusItem.button.image = icon;
+    self.statusItem.button.contentTintColor = nil;
     NSString *state = mode == MLSleepModeOff ? @"Off" :
                       mode == MLSleepModeSystem ? @"Prevent Sleep" : @"Prevent Sleep and Display Sleep";
     NSString *label = [@"MiniLaunch — Caffein: " stringByAppendingString:state];
