@@ -1,6 +1,7 @@
 #import <Cocoa/Cocoa.h>
 #import "AppCatalog.h"
 #import "RecentDirectories.h"
+#import "CommandStore.h"
 #import <sqlite3.h>
 #import "GestureRecognizer.h"
 #import "SleepController.h"
@@ -70,6 +71,79 @@ static void recentDirectoryTests(void) {
     error = nil;
     check(![RecentDirectories directoriesAtDatabaseURL:missing error:&error] && error, @"저장소 부재를 오류로 구분합니다.");
     check(![fm fileExistsAtPath:missing.path], @"읽기 전용 조회는 없는 저장소를 만들지 않습니다.");
+    [fm removeItemAtURL:root error:nil];
+}
+static void waitForCommands(CommandStore *store) {
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:3];
+    while (store.refreshing && deadline.timeIntervalSinceNow > 0)
+        [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.005]];
+    check(!store.refreshing, @"명령 설정 비동기 조회가 완료됩니다.");
+}
+static void commandTests(void) {
+    NSURL *root = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString]];
+    NSFileManager *fm = NSFileManager.defaultManager;
+    [fm createDirectoryAtURL:root withIntermediateDirectories:YES attributes:nil error:nil];
+    NSURL *url = [root URLByAppendingPathComponent:@"config.yml"];
+    NSError *error = nil;
+    check([CommandStore commandsAtURL:url error:&error].count == 0 && !error, @"없는 설정 파일은 명령 없는 정상 상태입니다.");
+    check([CommandStore ensureConfigurationAtURL:url error:&error] && !error, @"메뉴에서 없는 설정 파일을 생성합니다.");
+    NSString *initial = [NSString stringWithContentsOfURL:url encoding:NSUTF8StringEncoding error:nil];
+    check([initial containsString:@"commands: {}\n"] && [initial containsString:@"# 한 줄 명령 예시:"] &&
+        [initial containsString:@"# 여러 줄 명령"], @"기본 설정과 한국어 주석 안내를 포함합니다.");
+    check([CommandStore commandsAtURL:url error:&error].count == 0 && !error, @"생성한 기본 설정은 유효한 빈 명령 목록입니다.");
+    [@"" writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    check([CommandStore commandsAtURL:url error:&error].count == 0 && !error, @"빈 설정 파일은 빈 목록입니다.");
+    NSString *yaml = @"commands:\n  \"server:ssh\": ssh -t user@host \"echo test\" # 주석\n  여러줄: |\n    cd Workspace\n    ls -al\n";
+    [yaml writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    check([CommandStore ensureConfigurationAtURL:url error:&error] &&
+        [[NSString stringWithContentsOfURL:url encoding:NSUTF8StringEncoding error:nil] isEqualToString:yaml],
+        @"설정 열기는 기존 파일의 명령과 주석을 덮어쓰지 않습니다.");
+    NSArray *commands = [CommandStore commandsAtURL:url error:&error];
+    CFAbsoluteTime started = CFAbsoluteTimeGetCurrent();
+    for (NSUInteger i = 0; i < 1000; i++) {
+        @autoreleasepool { [CommandStore commandsAtURL:url error:nil]; }
+    }
+    NSLog(@"설정 읽기와 YAML 해석 평균: %.3fms (소규모 로컬 설정, 반복 조회)",
+          (CFAbsoluteTimeGetCurrent() - started) * 1000 / 1000);
+    check(commands.count == 2 && [commands[0][@"name"] isEqualToString:@"server:ssh"] &&
+          [commands[0][@"command"] isEqualToString:@"ssh -t user@host \"echo test\""] &&
+          [commands[1][@"command"] isEqualToString:@"cd Workspace\nls -al\n"], @"명령 작성 순서와 따옴표·여러 줄을 보존하고 YAML 주석을 해석합니다.");
+    CommandStore *store = [[CommandStore alloc] initWithURL:url];
+    __block NSUInteger notifications = 0;
+    store.didRefresh = ^{ check(NSThread.isMainThread, @"설정 갱신은 메인 스레드에 전달됩니다."); notifications++; };
+    [store refresh]; [store refresh];
+    check(store.refreshing && store.commands.count == 0, @"설정 조회를 비동기로 시작하고 중복 요청을 합칩니다.");
+    waitForCommands(store);
+    check([store.commands isEqualToArray:commands] && notifications == 1, @"정상 설정을 캐시합니다.");
+    [store refresh]; waitForCommands(store);
+    check(notifications == 1, @"같은 명령은 화면 갱신을 요청하지 않습니다.");
+    NSArray *invalid = @[@"commands: [x]", @"commands: {x: one, x: two}", @"commands: {x: 123}",
+        @"commands: {x: []}", @"commands: {x: ''}", @"commands: {'': ls}", @"commands: {x: null}",
+        @"commands: [", @"commands: {}\n---\ncommands: {}", @"commands: {}\ncommands: {}"];
+    for (NSString *text in invalid) {
+        [text writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        error = nil;
+        check(![CommandStore commandsAtURL:url error:&error] && error, @"잘못된 형식·중복·비문자열·빈 명령·복수 문서를 거부합니다.");
+    }
+    NSMutableString *deep = [NSMutableString stringWithString:@"commands: "];
+    for (NSUInteger i = 0; i < 1100; i++) [deep appendString:@"["];
+    for (NSUInteger i = 0; i < 1100; i++) [deep appendString:@"]"];
+    [deep writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    error = nil;
+    check(![CommandStore commandsAtURL:url error:&error] && error, @"과도한 YAML 중첩은 파서 오류로 반환합니다.");
+    [store refresh]; waitForCommands(store);
+    check(store.error && [store.commands isEqualToArray:commands], @"잘못된 설정은 오류를 알리고 마지막 정상 캐시를 유지합니다.");
+    [@"commands: {}" writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    [store refresh]; waitForCommands(store);
+    check(!store.error && store.commands.count == 0, @"수정된 빈 설정은 오류와 명령을 지웁니다.");
+    [yaml writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    [store refresh]; waitForCommands(store);
+    [fm removeItemAtURL:url error:nil];
+    [store refresh]; waitForCommands(store);
+    check(!store.error && store.commands.count == 0, @"파일 삭제는 캐시를 비웁니다.");
+    [fm createDirectoryAtURL:url withIntermediateDirectories:NO attributes:nil error:nil];
+    error = nil;
+    check(![CommandStore ensureConfigurationAtURL:url error:&error] && error, @"설정 경로가 폴더이면 생성 실패를 알립니다.");
     [fm removeItemAtURL:root error:nil];
 }
 static void gestureTests(void) {
@@ -275,8 +349,8 @@ static void sleepLogTests(void) {
 }
 int main(void) {
     @autoreleasepool {
-        recentDirectoryTests(); gestureTests(); catalogTests(); protectedApplicationTests(); groupingTests(); sleepTests(); sleepLogTests();
-        puts("통과: Cursor 최근 폴더와 비동기 캐시, 제스처 인식, Finder alias/폴더, Tag 그룹, 잠자기 방지 요청 및 로그 테스트");
+        commandTests(); recentDirectoryTests(); gestureTests(); catalogTests(); protectedApplicationTests(); groupingTests(); sleepTests(); sleepLogTests();
+        puts("통과: YAML 명령 설정과 비동기 캐시, Cursor 최근 폴더와 비동기 캐시, 제스처 인식, Finder alias/폴더, Tag 그룹, 잠자기 방지 요청 및 로그 테스트");
     }
     return 0;
 }

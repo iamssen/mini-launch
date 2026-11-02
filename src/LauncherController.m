@@ -4,6 +4,8 @@
 #import "LauncherAppearance.h"
 #import "RecentDirectories.h"
 #import "FolderIcon.h"
+#import "CommandStore.h"
+#import "TerminalCommand.h"
 #import <QuartzCore/QuartzCore.h>
 #import <CoreImage/CoreImage.h>
 
@@ -34,6 +36,9 @@ static const CGFloat GroupGap = 20;
 @property NSArray<NSArray<MLItem *> *> *groups;
 @property NSMutableArray<LauncherActionButton *> *buttons;
 @property RecentDirectories *recentDirectories;
+@property CommandStore *commandStore;
+@property NSArray<NSDictionary<NSString *, NSString *> *> *commands;
+@property BOOL commandRunning;
 @property NSArray<NSURL *> *directoryURLs;
 @property FlippedView *directoryList;
 @property BOOL entering;
@@ -61,6 +66,8 @@ static const CGFloat GroupGap = 20;
     if (!(self = [super init])) return nil;
     _root = root;
     _directoryURLs = @[];
+    _commands = @[];
+    _commandStore = [[CommandStore alloc] initWithURL:[root URLByAppendingPathComponent:@"config.yml"]];
     NSURL *database = [NSURL fileURLWithPath:[NSHomeDirectory() stringByAppendingPathComponent:
         @"Library/Application Support/Cursor/User/globalStorage/state.vscdb"]];
     _recentDirectories = [[RecentDirectories alloc] initWithDatabaseURL:database];
@@ -124,6 +131,8 @@ static const CGFloat GroupGap = 20;
         if (!weakSelf.trackingMenu) [weakSelf hide];
     }];
     _recentDirectories.didRefresh = ^{ [weakSelf applyRecentDirectories]; };
+    _commandStore.didRefresh = ^{ [weakSelf applyRecentDirectories]; };
+    [_commandStore refresh];
     [_recentDirectories refresh];
     return self;
 }
@@ -187,6 +196,7 @@ static const CGFloat GroupGap = 20;
         self.entering = NO;
     }
     [self.recentDirectories refresh];
+    [self.commandStore refresh];
 }
 - (CGFloat)gridHeight {
     CGFloat height = 0;
@@ -198,8 +208,11 @@ static const CGFloat GroupGap = 20;
     if (self.path.count != 1) return @[];
     NSMutableArray *frames = [NSMutableArray array];
     CGFloat x = 0, y = 0;
-    for (NSURL *url in self.directoryURLs) {
-        CGFloat textWidth = [url.lastPathComponent sizeWithAttributes:@{NSFontAttributeName: [NSFont systemFontOfSize:13]}].width;
+    NSMutableArray<NSString *> *names = [NSMutableArray array];
+    for (NSURL *url in self.directoryURLs) [names addObject:url.lastPathComponent];
+    for (NSDictionary *command in self.commands) [names addObject:command[@"name"]];
+    for (NSString *name in names) {
+        CGFloat textWidth = [name sizeWithAttributes:@{NSFontAttributeName: [NSFont systemFontOfSize:13]}].width;
         CGFloat itemWidth = MIN(width, ceil(textWidth) + 36);
         if (x > 0 && x + itemWidth > width) { x = 0; y += 32; }
         [frames addObject:[NSValue valueWithRect:NSMakeRect(x, y, itemWidth, 28)]];
@@ -224,8 +237,12 @@ static const CGFloat GroupGap = 20;
 - (void)applyRecentDirectories {
     // 조작 중에는 항목 이동을 피하고 다음 열기에서 최신 캐시를 사용합니다.
     if (!self.visible || self.entering || self.trackingMenu || self.selected >= 0 || self.path.count != 1) return;
-    if ([self.directoryURLs isEqualToArray:self.recentDirectories.directories]) return;
+    if (self.commandStore.error) [self showError:self.commandStore.error.localizedDescription];
+    else self.statusLabel.hidden = YES;
+    if ([self.directoryURLs isEqualToArray:self.recentDirectories.directories] &&
+        [self.commands isEqualToArray:self.commandStore.commands]) return;
     self.directoryURLs = self.recentDirectories.directories;
+    self.commands = self.commandStore.commands;
     [self layout];
     [self renderItems];
 }
@@ -233,7 +250,7 @@ static const CGFloat GroupGap = 20;
     NSRect area = self.availableFrame;
     NSInteger capacity = MAX(1, MIN(6, (NSInteger)((NSWidth(area) - SideInset * 2) / CellWidth)));
     self.columns = MAX(1, MIN(capacity, (NSInteger)self.items.count));
-    if (!self.items.count || (self.path.count == 1 && self.directoryURLs.count))
+    if (!self.items.count || (self.path.count == 1 && (self.directoryURLs.count || self.commands.count)))
         self.columns = MAX(self.columns, MIN(3, capacity));
     CGFloat width = MIN(NSWidth(area), self.columns * CellWidth + SideInset * 2);
     BOOL tail = self.dockPresentation && self.bottomDock;
@@ -399,6 +416,7 @@ static const CGFloat GroupGap = 20;
 }
 - (void)reload {
     self.directoryURLs = self.recentDirectories.directories;
+    self.commands = self.commandStore.commands;
     NSError *error = nil;
     NSArray *catalog = [AppCatalog itemsAtURL:self.path.lastObject error:&error];
     self.groups = [AppCatalog groupsForItems:catalog];
@@ -413,6 +431,7 @@ static const CGFloat GroupGap = 20;
     [self layout];
     [self renderItems];
     if (error) [self showError:[NSString stringWithFormat:@"폴더를 읽을 수 없습니다: %@", error.localizedDescription]];
+    else if (self.commandStore.error) [self showError:self.commandStore.error.localizedDescription];
 }
 - (void)renderItems {
     for (NSView *view in self.grid.subviews.copy) [view removeFromSuperview];
@@ -469,25 +488,32 @@ static const CGFloat GroupGap = 20;
         [self.directoryList addSubview:separator];
     }
     for (NSUInteger i = 0; i < frames.count; i++) {
-        NSURL *url = self.directoryURLs[i];
+        BOOL isCommand = i >= self.directoryURLs.count;
+        NSDictionary *command = isCommand ? self.commands[i - self.directoryURLs.count] : nil;
+        NSURL *url = isCommand ? nil : self.directoryURLs[i];
         NSRect frame = NSOffsetRect(frames[i].rectValue, 0, 16);
         LauncherDirectoryButton *button = [[LauncherDirectoryButton alloc] initWithFrame:frame];
         button.bordered = NO;
         button.focusRingType = NSFocusRingTypeNone;
-        button.title = url.lastPathComponent;
-        button.image = [NSWorkspace.sharedWorkspace iconForFile:url.path];
+        button.title = isCommand ? command[@"name"] : url.lastPathComponent;
+        // 정사각형 앱 아이콘의 보이는 높이를 가로로 긴 폴더 아이콘에 맞춥니다.
+        button.iconPointSize = isCommand ? 15 : 16;
+        button.iconOffsetY = isCommand ? 1 : 0;
+        button.image = [NSWorkspace.sharedWorkspace iconForFile:isCommand
+            ? @"/System/Applications/Utilities/Terminal.app" : url.path];
         __weak LauncherDirectoryButton *weakButton = button;
-        MLLoadFolderIcon(url, 16, self.panel.backingScaleFactor, ^(NSImage *image) {
+        if (!isCommand) MLLoadFolderIcon(url, 16, self.panel.backingScaleFactor, ^(NSImage *image) {
             LauncherDirectoryButton *currentButton = weakButton;
             currentButton.image = image;
             currentButton.needsDisplay = YES;
         });
-        button.toolTip = url.path;
-        button.accessibilityLabel = [NSString stringWithFormat:@"Cursor로 열기: %@", url.lastPathComponent];
+        button.toolTip = isCommand ? command[@"command"] : url.path;
+        button.accessibilityLabel = isCommand ? [NSString stringWithFormat:@"명령 실행: %@", command[@"name"]]
+            : [NSString stringWithFormat:@"Cursor로 열기: %@", url.lastPathComponent];
         button.target = self;
         button.action = @selector(choose:);
         button.tag = self.buttons.count;
-        button.menu = [self menuForURL:url directory:YES valid:YES];
+        if (!isCommand) button.menu = [self menuForURL:url directory:YES valid:YES];
         [self.directoryList addSubview:button];
         [self.buttons addObject:button];
     }
@@ -504,6 +530,23 @@ static const CGFloat GroupGap = 20;
 - (void)choose:(NSButton *)sender { self.selected = sender.tag; [self activateSelection]; }
 - (void)activateSelection {
     if (self.selected < 0 || self.selected >= (NSInteger)self.buttons.count) return;
+    if (self.selected >= (NSInteger)(self.items.count + self.directoryURLs.count)) {
+        if (self.commandRunning) return;
+        self.commandRunning = YES;
+        NSString *command = self.commands[self.selected - self.items.count - self.directoryURLs.count][@"command"];
+        __weak typeof(self) weakSelf = self;
+        [TerminalCommand run:command completion:^(NSString *error) {
+            weakSelf.commandRunning = NO;
+            if (error) {
+                // 권한 창 등으로 런처가 닫혀도 실행 실패는 별도 안내합니다.
+                NSAlert *alert = [NSAlert new];
+                alert.messageText = @"명령을 실행하지 못했습니다.";
+                alert.informativeText = error;
+                [alert runModal];
+            } else [weakSelf hide];
+        }];
+        return;
+    }
     if (self.selected >= (NSInteger)self.items.count) {
         NSURL *url = self.directoryURLs[self.selected - self.items.count];
         [self openURL:url withApplicationIdentifier:@"com.todesktop.230313mzl4w4u92"];
@@ -595,7 +638,10 @@ static const CGFloat GroupGap = 20;
     BOOL command = (event.modifierFlags & NSEventModifierFlagCommand) != 0;
     if (command && event.keyCode == 126) { [self goBack:nil]; return YES; }
     if (command && [event.charactersIgnoringModifiers.lowercaseString isEqualToString:@"r"]) {
-        [self reload]; [self.recentDirectories refresh]; return YES;
+        [self reload];
+        [self.recentDirectories refresh];
+        [self.commandStore refresh];
+        return YES;
     }
     if (command) return NO;
     if (event.keyCode == 53) { [self hide]; return YES; }

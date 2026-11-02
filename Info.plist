@@ -11,5 +11,6 @@
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>LSUIElement</key><true/>
 <key>NSHighResolutionCapable</key><true/>
+<key>NSAppleEventsUsageDescription</key><string>선택한 명령을 새 창에서 실행하기 위해 iTerm 또는 Terminal을 제어합니다.</string>
 <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict></plist>

@@ -13,7 +13,8 @@ fi
 rm -rf build
 mkdir -p build/composer
 export CLANG_MODULE_CACHE_PATH="$PWD/build/module-cache"
-xcrun clang -fobjc-arc -O2 -Wall -Wextra -Werror -mmacosx-version-min=13.0   src/*.m src/GestureRecognizer.c -framework Cocoa -framework ApplicationServices   -framework QuartzCore -framework CoreImage -framework QuickLookThumbnailing -framework IOKit -lsqlite3 -o build/MiniLaunch
+./build-yaml.sh
+xcrun clang -Ivendor/libyaml/include -fobjc-arc -O2 -Wall -Wextra -Werror -mmacosx-version-min=13.0   src/*.m src/GestureRecognizer.c -framework Cocoa -framework ApplicationServices   -framework QuartzCore -framework CoreImage -framework QuickLookThumbnailing -framework IOKit -lsqlite3 build/yaml/libyaml.a -o build/MiniLaunch
 if ! xcrun --find actool >/dev/null 2>&1; then
   echo "Icon Composer 아이콘 빌드에는 Xcode 26 이상의 actool이 필요합니다." >&2
   exit 1
@@ -24,6 +25,7 @@ rm -rf dist/MiniLaunch.app
 mkdir -p dist/MiniLaunch.app/Contents/{MacOS,Resources}
 cp build/MiniLaunch dist/MiniLaunch.app/Contents/MacOS/MiniLaunch
 cp build/composer/Assets.car build/composer/icon.icns dist/MiniLaunch.app/Contents/Resources/
+cp resources/*.applescript vendor/libyaml/LICENSE dist/MiniLaunch.app/Contents/Resources/
 cp Info.plist dist/MiniLaunch.app/Contents/Info.plist
 /usr/libexec/PlistBuddy -c "Merge build/composer-info.plist" dist/MiniLaunch.app/Contents/Info.plist
 plutil -lint dist/MiniLaunch.app/Contents/Info.plist

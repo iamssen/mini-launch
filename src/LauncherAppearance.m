@@ -100,14 +100,19 @@
         [[NSColor colorWithWhite:1 alpha:self.highlighted ? 0.22 : 0.13] setFill];
         [[NSBezierPath bezierPathWithRoundedRect:self.bounds xRadius:6 yRadius:6] fill];
     }
-    [self.image drawInRect:NSMakeRect(6, 6, 16, 16) fromRect:NSZeroRect
+    CGFloat iconSize = self.iconPointSize > 0 ? self.iconPointSize : 16;
+    CGFloat centerY = NSMidY(self.bounds);
+    [self.image drawInRect:NSMakeRect(6 + (16 - iconSize) / 2, centerY - iconSize / 2 + self.iconOffsetY, iconSize, iconSize) fromRect:NSZeroRect
         operation:NSCompositingOperationSourceOver fraction:1 respectFlipped:YES hints:nil];
     NSMutableParagraphStyle *paragraph = [NSMutableParagraphStyle new];
     paragraph.lineBreakMode = NSLineBreakByTruncatingMiddle;
-    [self.title drawInRect:NSMakeRect(28, 6, MAX(0, NSWidth(self.bounds) - 34), 17)
-        withAttributes:@{NSFontAttributeName: [NSFont systemFontOfSize:13],
-                         NSForegroundColorAttributeName: NSColor.whiteColor,
-                         NSParagraphStyleAttributeName: paragraph}];
+    NSDictionary *attributes = @{NSFontAttributeName: [NSFont systemFontOfSize:13],
+                                 NSForegroundColorAttributeName: NSColor.whiteColor,
+                                 NSParagraphStyleAttributeName: paragraph};
+    // 고정 y 좌표 대신 글꼴을 포함한 텍스트 높이와 아이콘 높이를 각각 중앙에 맞춥니다.
+    CGFloat textHeight = [self.title sizeWithAttributes:attributes].height;
+    [self.title drawInRect:NSMakeRect(28, centerY - textHeight / 2, MAX(0, NSWidth(self.bounds) - 34), textHeight)
+        withAttributes:attributes];
 }
 @end
 

@@ -14,6 +14,10 @@
 @end
 
 @interface LauncherDirectoryButton : LauncherActionButton
+// 0이면 기본 16pt를 사용하며 지정한 크기는 같은 아이콘 영역의 중앙에 그립니다.
+@property (nonatomic) CGFloat iconPointSize;
+// 뒤집힌 좌표계에서 양수는 아래쪽으로 이동합니다.
+@property (nonatomic) CGFloat iconOffsetY;
 @end
 
 // 기본 NSButtonCell의 이미지/제목 배치 대신 일정한 크기로 직접 그립니다.

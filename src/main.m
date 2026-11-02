@@ -1,6 +1,7 @@
 #import <Cocoa/Cocoa.h>
 #import <ApplicationServices/ApplicationServices.h>
 #import "LauncherController.h"
+#import "CommandStore.h"
 #import "GestureMonitor.h"
 #import "SleepController.h"
 #import "SleepLog.h"
@@ -23,6 +24,13 @@
 - (NSString *)openFolderMenuTitle {
     return [@"Open " stringByAppendingString:self.appsDirectoryURL.path.stringByAbbreviatingWithTildeInPath];
 }
+- (NSMenuItem *)openConfigMenuItem {
+    NSString *path = [self.appsDirectoryURL URLByAppendingPathComponent:@"config.yml"].path;
+    NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:[@"Open " stringByAppendingString:path.stringByAbbreviatingWithTildeInPath]
+        action:@selector(openConfig:) keyEquivalent:@""];
+    item.target = self;
+    return item;
+}
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     NSMenu *menu = [NSMenu new];
     NSMenuItem *appItem = [NSMenuItem new]; [menu addItem:appItem];
@@ -30,6 +38,7 @@
     NSMenuItem *openFolder = [[NSMenuItem alloc] initWithTitle:self.openFolderMenuTitle action:@selector(openFolder:) keyEquivalent:@""];
     openFolder.target = self;
     [appMenu addItem:openFolder];
+    [appMenu addItem:[self openConfigMenuItem]];
     self.sleepController = [SleepController new];
     NSURL *logs = [NSURL fileURLWithPath:[@"~/Library/Logs/MiniLaunch" stringByExpandingTildeInPath] isDirectory:YES];
     self.sleepLog = [[SleepLog alloc] initWithDirectoryURL:logs];
@@ -214,10 +223,45 @@
     NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:self.openFolderMenuTitle action:@selector(openFolder:) keyEquivalent:@""];
     item.target = self;
     [menu addItem:item];
+    [menu addItem:[self openConfigMenuItem]];
     return menu;
 }
 - (void)openFolder:(id)sender {
     [NSWorkspace.sharedWorkspace openURL:self.appsDirectoryURL];
+}
+- (void)openConfig:(id)sender {
+    (void)sender;
+    NSURL *cursor = [NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:@"com.todesktop.230313mzl4w4u92"];
+    if (!cursor) {
+        NSAlert *alert = [NSAlert new];
+        alert.messageText = @"Cursor가 설치되어 있지 않습니다.";
+        [alert runModal];
+        return;
+    }
+    NSURL *config = [self.appsDirectoryURL URLByAppendingPathComponent:@"config.yml"];
+    NSError *creationError = nil;
+    if (![CommandStore ensureConfigurationAtURL:config error:&creationError]) {
+        NSAlert *alert = [NSAlert new];
+        alert.messageText = @"설정 파일을 준비하지 못했습니다.";
+        alert.informativeText = [NSString stringWithFormat:@"%@\n%@", config.path, creationError.localizedDescription];
+        [alert runModal];
+        return;
+    }
+    NSWorkspaceOpenConfiguration *configuration = [NSWorkspaceOpenConfiguration configuration];
+    configuration.promptsUserIfNeeded = NO;
+    [NSWorkspace.sharedWorkspace openURLs:@[config] withApplicationAtURL:cursor
+        configuration:configuration
+        completionHandler:^(NSRunningApplication *app, NSError *error) {
+            (void)app;
+            if (!error) return;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                NSAlert *alert = [NSAlert new];
+                alert.messageText = @"설정 파일을 열지 못했습니다.";
+                alert.informativeText = [NSString stringWithFormat:@"파일: %@\nCursor: %@\n%@ (%@ %ld)",
+                    config.path, cursor.path, error.localizedDescription, error.domain, (long)error.code];
+                [alert runModal];
+            });
+        }];
 }
 - (void)requestAccessibility:(id)sender {
     AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)@{(__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES});
