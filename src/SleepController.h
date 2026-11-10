@@ -1,5 +1,5 @@
 #import <Foundation/Foundation.h>
-@class SleepLog;
+@class EventLog;
 
 typedef NS_ENUM(NSInteger, MLSleepMode) {
     MLSleepModeOff,
@@ -9,7 +9,7 @@ typedef NS_ENUM(NSInteger, MLSleepMode) {
 
 @interface SleepController : NSObject
 @property (readonly) MLSleepMode mode;
-@property SleepLog *log;
+@property EventLog *log;
 - (NSDictionary *)diagnosticState;
 - (BOOL)setMode:(MLSleepMode)mode error:(NSError **)error;
 @end

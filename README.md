@@ -155,3 +155,14 @@ open dist/MiniLaunch.app --args -DisableGestures YES
 ```
 
 구현 사양과 테스트 방법은 [SPEC.md](SPEC.md), 변경·검증 기록과 남은 실기 확인 항목은 [HISTORY.md](HISTORY.md)에 있습니다.
+
+## 앱 아이콘 변경
+
+메뉴 막대 아이콘을 오른쪽 클릭하고 Caffein 아래의 **Apply App Icons**를 선택합니다. 선택할 때마다 앱 폴더의 `config.yml`에서 다음 설정을 읽습니다. 절대 경로, `~/` 경로, 설정 파일 기준 상대 경로를 사용할 수 있습니다.
+
+```yaml
+app_icons:
+  "~/Applications/Chrome Apps.localized/ChatGPT.app": "icons/chatgpt.png"
+```
+
+지정한 PNG에서 생성한 아이콘과 현재 아이콘의 데이터가 같거나, 32px와 1024px로 그린 픽셀이 두 크기 모두 일치하면 앱을 그대로 둡니다. 커스텀 아이콘이 없으면 시스템이 표시하는 앱 아이콘을 비교합니다. 다르면 해당 경로의 앱에 정상 종료를 요청하고 최대 10초 기다립니다. 종료되면 아이콘을 적용하고 원래 실행 중이던 앱을 다시 엽니다. 종료가 거부되거나 시간이 초과되면 해당 앱의 변경을 건너뜁니다. 이미 일치하는 앱은 알림 없이 건너뛰고, 변경과 오류만 알림에 표시합니다. 모든 앱의 처리 결과와 앱·PNG 경로는 날짜별 JSONL에 7일간 보관합니다. `Advanced → Open Apply App Icons Logs`에서 로그 폴더를 엽니다.

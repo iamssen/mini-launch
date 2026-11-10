@@ -1,11 +1,16 @@
-#import "SleepLog.h"
+#import "EventLog.h"
 #import <fcntl.h>
 #import <unistd.h>
 #import <errno.h>
 
-@implementation SleepLog
-- (instancetype)initWithDirectoryURL:(NSURL *)directoryURL {
-    if ((self = [super init])) _directoryURL = directoryURL;
+@implementation EventLog {
+    NSString *_prefix;
+}
+- (instancetype)initWithDirectoryURL:(NSURL *)directoryURL filePrefix:(NSString *)prefix {
+    if ((self = [super init])) {
+        _directoryURL = directoryURL;
+        _prefix = [prefix stringByAppendingString:@"-"];
+    }
     return self;
 }
 - (void)recordEvent:(NSString *)event fields:(NSDictionary *)fields {
@@ -22,19 +27,19 @@
     NSData *data = [NSJSONSerialization dataWithJSONObject:record options:NSJSONWritingSortedKeys error:&error];
     NSFileManager *fm = NSFileManager.defaultManager;
     if (!data || ![fm createDirectoryAtURL:self.directoryURL withIntermediateDirectories:YES attributes:nil error:&error]) {
-        NSLog(@"Caffein 로그 기록 실패: %@", error);
+        NSLog(@"로그 기록 실패: %@", error);
         return;
     }
-    NSURL *file = [self.directoryURL URLByAppendingPathComponent:[NSString stringWithFormat:@"caffein-%@.jsonl", day]];
+    NSURL *file = [self.directoryURL URLByAppendingPathComponent:[NSString stringWithFormat:@"%@%@.jsonl", _prefix, day]];
     int descriptor = open(file.fileSystemRepresentation, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
-    if (descriptor < 0) { NSLog(@"Caffein 로그 열기 실패: %d", errno); return; }
+    if (descriptor < 0) { NSLog(@"로그 열기 실패: %d", errno); return; }
     NSMutableData *line = [data mutableCopy];
     [line appendBytes:"\n" length:1];
     NSUInteger offset = 0;
     while (offset < line.length) {
         ssize_t written = write(descriptor, (const char *)line.bytes + offset, line.length - offset);
         if (written < 0 && errno == EINTR) continue;
-        if (written <= 0) { NSLog(@"Caffein 로그 쓰기 실패: %d", errno); break; }
+        if (written <= 0) { NSLog(@"로그 쓰기 실패: %d", errno); break; }
         offset += (NSUInteger)written;
     }
     close(descriptor);
@@ -49,16 +54,16 @@
     dateFormatter.dateFormat = @"yyyy-MM-dd";
     for (NSURL *candidate in [fm contentsOfDirectoryAtURL:self.directoryURL includingPropertiesForKeys:nil options:0 error:&error]) {
         NSString *name = candidate.lastPathComponent;
-        if (name.length != 24 || ![name hasPrefix:@"caffein-"] || ![name hasSuffix:@".jsonl"]) continue;
+        if (name.length != _prefix.length + 16 || ![name hasPrefix:_prefix] || ![name hasSuffix:@".jsonl"]) continue;
         NSNumber *regular = nil;
         [candidate getResourceValue:&regular forKey:NSURLIsRegularFileKey error:nil];
         if (!regular.boolValue) continue;
-        NSString *dateString = [name substringWithRange:NSMakeRange(8, 10)];
+        NSString *dateString = [name substringWithRange:NSMakeRange(_prefix.length, 10)];
         NSDate *date = [dateFormatter dateFromString:dateString];
         if (date && [[dateFormatter stringFromDate:date] isEqualToString:dateString] && [date compare:cutoff] == NSOrderedAscending) {
-            if (![fm removeItemAtURL:candidate error:&error]) NSLog(@"Caffein 이전 로그 삭제 실패: %@", error);
+            if (![fm removeItemAtURL:candidate error:&error]) NSLog(@"이전 로그 삭제 실패: %@", error);
         }
     }
-    if (error) NSLog(@"Caffein 로그 폴더 처리 실패: %@", error);
+    if (error) NSLog(@"로그 폴더 처리 실패: %@", error);
 }
 @end

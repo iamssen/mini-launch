@@ -10,4 +10,5 @@
 // 설정 열기 메뉴에서만 호출하며 기존 파일은 덮어쓰지 않습니다.
 + (BOOL)ensureConfigurationAtURL:(NSURL *)url error:(NSError **)error;
 + (NSArray<NSDictionary<NSString *, NSString *> *> *)commandsAtURL:(NSURL *)url error:(NSError **)error;
++ (NSArray<NSDictionary<NSString *, NSString *> *> *)appIconsAtURL:(NSURL *)url error:(NSError **)error;
 @end

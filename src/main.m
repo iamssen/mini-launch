@@ -2,18 +2,21 @@
 #import <ApplicationServices/ApplicationServices.h>
 #import "LauncherController.h"
 #import "CommandStore.h"
+#import "AppIconUpdater.h"
 #import "GestureMonitor.h"
 #import "SleepController.h"
-#import "SleepLog.h"
+#import "EventLog.h"
 @interface AppDelegate : NSObject <NSApplicationDelegate>
 @property LauncherController *launcher;
 @property GestureMonitor *gestures;
 @property NSUInteger gestureReconnectGeneration;
 @property NSStatusItem *statusItem;
 @property NSMenu *statusMenu;
+@property BOOL applyingAppIcons;
 @property SleepController *sleepController;
 @property NSImage *launcherStatusIcon;
-@property SleepLog *sleepLog;
+@property EventLog *sleepLog;
+@property EventLog *appIconLog;
 @property NSTimer *sleepCheckTimer;
 @end
 @implementation AppDelegate
@@ -41,7 +44,9 @@
     [appMenu addItem:[self openConfigMenuItem]];
     self.sleepController = [SleepController new];
     NSURL *logs = [NSURL fileURLWithPath:[@"~/Library/Logs/MiniLaunch" stringByExpandingTildeInPath] isDirectory:YES];
-    self.sleepLog = [[SleepLog alloc] initWithDirectoryURL:logs];
+    self.sleepLog = [[EventLog alloc] initWithDirectoryURL:logs filePrefix:@"caffein"];
+    self.appIconLog = [[EventLog alloc] initWithDirectoryURL:[logs URLByAppendingPathComponent:@"Apply App Icons" isDirectory:YES]
+        filePrefix:@"apply-app-icons"];
     self.sleepController.log = self.sleepLog;
     NSDictionary *info = NSBundle.mainBundle.infoDictionary;
     [self.sleepLog recordEvent:@"app_start" fields:@{@"version": info[@"CFBundleShortVersionString"] ?: @"",
@@ -64,12 +69,14 @@
         [appMenu addItem:item];
     }
     [appMenu addItem:NSMenuItem.separatorItem];
+    NSMenuItem *icons = [appMenu addItemWithTitle:@"Apply App Icons" action:@selector(applyAppIcons:) keyEquivalent:@""];
+    icons.target = self;
     NSMenuItem *advancedItem = [[NSMenuItem alloc] initWithTitle:@"Advanced" action:nil keyEquivalent:@""];
     NSMenu *advanced = [[NSMenu alloc] initWithTitle:@"Advanced"];
     advancedItem.submenu = advanced;
     [appMenu addItem:advancedItem];
-    NSArray *titles = @[@"Allow Dock Position Access…", @"Gesture Status…", @"Reconnect Gesture Devices", @"Open Caffein Logs"];
-    NSArray *actions = @[@"requestAccessibility:", @"gestureStatus:", @"restartGestures:", @"openSleepLogs:"];
+    NSArray *titles = @[@"Allow Dock Position Access…", @"Gesture Status…", @"Reconnect Gesture Devices", @"Open Caffein Logs", @"Open Apply App Icons Logs"];
+    NSArray *actions = @[@"requestAccessibility:", @"gestureStatus:", @"restartGestures:", @"openSleepLogs:", @"openAppIconLogs:"];
     for (NSUInteger i = 0; i < titles.count; i++) {
         NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:titles[i] action:NSSelectorFromString(actions[i]) keyEquivalent:@""];
         item.target = self;
@@ -126,6 +133,25 @@
     }
     [self.launcher showFromDock:NO];
 }
+- (BOOL)validateMenuItem:(NSMenuItem *)item {
+    return item.action != @selector(applyAppIcons:) || !self.applyingAppIcons;
+}
+- (void)applyAppIcons:(id)sender {
+    if (self.applyingAppIcons) return;
+    self.applyingAppIcons = YES;
+    NSURL *configuration = [self.appsDirectoryURL URLByAppendingPathComponent:@"config.yml"];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSString *result = MLApplyAppIcons(configuration, self.appIconLog);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.applyingAppIcons = NO;
+            if (!result) return;
+            NSAlert *alert = [NSAlert new];
+            alert.messageText = @"Apply App Icons";
+            alert.informativeText = result;
+            [alert runModal];
+        });
+    });
+}
 - (void)selectSleepMode:(NSMenuItem *)sender {
     NSError *error = nil;
     BOOL success = [self.sleepController setMode:(MLSleepMode)sender.tag error:&error];
@@ -151,6 +177,10 @@
         fields[@"observed_at"] = observed;
         [self.sleepLog recordEvent:@"power_event" fields:fields];
     });
+}
+- (void)openAppIconLogs:(id)sender {
+    [self.appIconLog recordEvent:@"logs_opened" fields:@{}];
+    [NSWorkspace.sharedWorkspace openURL:self.appIconLog.directoryURL];
 }
 - (void)openSleepLogs:(id)sender {
     [self.sleepLog recordEvent:@"logs_opened" fields:@{}];

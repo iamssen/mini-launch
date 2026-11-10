@@ -101,9 +101,12 @@
 ## 관리 메뉴
 
 - 메뉴 막대 아이콘 오른클릭·Control-클릭으로 관리 메뉴를 엽니다. 별도 Grid 열기 명령은 두지 않습니다.
-- 메인 메뉴는 `Open <경로>`, `Open <경로>/config.yml`, Caffein 모드 세 개, `Advanced`, `Quit MiniLaunch`로 구성합니다. Caffein 모드는 구분선으로 묶고 하위 메뉴를 사용하지 않습니다.
+- 메인 메뉴는 `Open <경로>`, `Open <경로>/config.yml`, Caffein 모드 세 개, `Apply App Icons`, `Advanced`, `Quit MiniLaunch`로 구성합니다. Caffein 모드는 구분선으로 묶고 하위 메뉴를 사용하지 않습니다.
+- `Apply App Icons`는 실행 시 `config.yml`의 `app_icons` 경로 매핑을 읽습니다. Finder 커스텀 아이콘의 ICNS 데이터 또는 32px·1024px sRGB 픽셀이 일치하면(커스텀 아이콘이 없으면 시스템 아이콘과 픽셀 비교) 건너뛰고, 다르면 대상 번들 경로로 정상 종료·아이콘 적용·기존 실행 상태 복원을 처리합니다.
+
 - 앱 폴더가 홈 디렉터리 안에 있으면 경로를 `~`로 줄입니다. Dock의 폴더 열기 메뉴에도 같은 이름을 사용합니다.
-- `Advanced`에는 `Allow Dock Position Access…`, `Gesture Status…`, `Reconnect Gesture Devices`, `Open Caffein Logs`를 배치합니다.
+- 아이콘 일치는 알림에서 생략합니다. 변경·오류가 있을 때만 결과를 표시합니다. 앱별 결과와 경로, 설정·준비 오류를 `~/Library/Logs/MiniLaunch/Apply App Icons/apply-app-icons-YYYY-MM-DD.jsonl`에 기록하고 UTC 기준 최근 7일을 보관합니다.
+- `Advanced`에는 `Allow Dock Position Access…`, `Gesture Status…`, `Reconnect Gesture Devices`, `Open Caffein Logs`, `Open Apply App Icons Logs`를 배치합니다.
 - `Open <경로>/config.yml`은 폴더 열기 바로 아래에 배치하며 Cursor를 명시해 엽니다. Dock 메뉴에도 같은 항목을 제공합니다. 최근 폴더와 같은 Cursor 번들 식별자·LaunchServices 조회·`NSWorkspace.openURLs`를 사용합니다. Cursor 미설치·파일 준비 실패·열기 실패는 알림으로 구분하며 열기 실패에는 양쪽 경로와 오류 코드를 표시합니다. 시스템의 추가 열기 안내는 요청하지 않습니다.
 - 편집 메뉴를 포함한 모든 메뉴 이름은 영문입니다.
 
@@ -150,7 +153,7 @@
 | GestureRecognizer | 하드웨어와 분리한 제스처 상태 머신 |
 | GestureMonitor | 비공개 프레임워크 로딩과 프레임 전달 |
 | SleepController | 공개 IOKit 요청 생성·해제·실제 상태 조회 |
-| SleepLog | 날짜별 JSONL 기록과 7일 보관 정리 |
+| EventLog | 날짜별 JSONL 기록과 7일 보관 정리 |
 | main | 앱 수명, 관리 메뉴, 기능 연결 |
 | icon.icon | Icon Composer 원본 |
 

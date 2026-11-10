@@ -1,5 +1,5 @@
 #import "SleepController.h"
-#import "SleepLog.h"
+#import "EventLog.h"
 #import <IOKit/pwr_mgt/IOPMLib.h>
 
 @implementation SleepController {

@@ -52,7 +52,10 @@ static NSString *Scalar(yaml_node_t *node) {
          "#   \"작업 목록\": |\n"
          "#     cd Workspace\n"
          "#     ls -al\n"
-         "# 이름은 중복할 수 없으며 이름과 명령은 비어 있지 않은 문자열이어야 합니다.\n";
+         "# 이름은 중복할 수 없으며 이름과 명령은 비어 있지 않은 문자열이어야 합니다.\n"
+         "\n# 메뉴 막대의 Apply App Icons에서 적용합니다.\n"
+         "# app_icons:\n#   '~/Applications/Chrome Apps.localized/ChatGPT.app': 'icons/chatgpt.png'\n"
+         "app_icons: {}\n";
     NSError *writeError = nil;
     if ([[initial dataUsingEncoding:NSUTF8StringEncoding] writeToURL:url options:NSDataWritingWithoutOverwriting error:&writeError]) return YES;
     // 생성 직전에 다른 프로세스가 저장한 경우에도 그 파일을 보존합니다.
@@ -62,6 +65,13 @@ static NSString *Scalar(yaml_node_t *node) {
     return NO;
 }
 + (NSArray<NSDictionary<NSString *, NSString *> *> *)commandsAtURL:(NSURL *)url error:(NSError **)error {
+    return [self entriesAtURL:url section:@"commands" error:error];
+}
++ (NSArray<NSDictionary<NSString *, NSString *> *> *)appIconsAtURL:(NSURL *)url error:(NSError **)error {
+    return [self entriesAtURL:url section:@"app_icons" error:error];
+}
++ (NSArray *)entriesAtURL:(NSURL *)url section:(NSString *)section error:(NSError **)error {
+    BOOL icons = [section isEqualToString:@"app_icons"];
     NSError *readError = nil;
     NSData *data = [NSData dataWithContentsOfURL:url options:0 error:&readError];
     if (!data) {
@@ -95,9 +105,9 @@ static NSString *Scalar(yaml_node_t *node) {
             NSString *key = Scalar(yaml_document_get_node(&document, pair->key));
             if (!key || [rootKeys containsObject:key]) { problem = @"설정 키는 중복되지 않는 문자열이어야 합니다."; break; }
             [rootKeys addObject:key];
-            if (![key isEqualToString:@"commands"]) continue;
+            if (![key isEqualToString:section]) continue;
             yaml_node_t *mapping = yaml_document_get_node(&document, pair->value);
-            if (mapping->type != YAML_MAPPING_NODE) { problem = @"commands는 이름과 명령 문자열의 매핑이어야 합니다."; break; }
+            if (mapping->type != YAML_MAPPING_NODE) { problem = icons ? @"app_icons는 앱 경로와 PNG 경로의 매핑이어야 합니다." : @"commands는 이름과 명령 문자열의 매핑이어야 합니다."; break; }
             NSMutableSet *names = [NSMutableSet set];
             for (yaml_node_pair_t *entry = mapping->data.mapping.pairs.start; entry < mapping->data.mapping.pairs.top; entry++) {
                 NSString *name = Scalar(yaml_document_get_node(&document, entry->key));
@@ -106,10 +116,10 @@ static NSString *Scalar(yaml_node_t *node) {
                 if (![name stringByTrimmingCharactersInSet:space].length ||
                     ![command stringByTrimmingCharactersInSet:space].length || [names containsObject:name] ||
                     [name rangeOfString:@"\0"].location != NSNotFound || [command rangeOfString:@"\0"].location != NSNotFound) {
-                    problem = @"명령 이름과 본문은 비어 있지 않은 문자열이어야 하며 이름을 중복할 수 없습니다."; break;
+                    problem = icons ? @"앱과 PNG 경로는 비어 있지 않은 문자열이어야 하며 앱 경로를 중복할 수 없습니다." : @"명령 이름과 본문은 비어 있지 않은 문자열이어야 하며 이름을 중복할 수 없습니다."; break;
                 }
                 [names addObject:name];
-                [commands addObject:@{@"name": name, @"command": command}];
+                [commands addObject:icons ? @{@"app": name, @"png": command} : @{@"name": name, @"command": command}];
             }
             if (problem) break;
         }

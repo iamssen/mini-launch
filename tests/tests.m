@@ -2,10 +2,11 @@
 #import "AppCatalog.h"
 #import "RecentDirectories.h"
 #import "CommandStore.h"
+#import "AppIconUpdater.h"
 #import <sqlite3.h>
 #import "GestureRecognizer.h"
 #import "SleepController.h"
-#import "SleepLog.h"
+#import "EventLog.h"
 #import <IOKit/pwr_mgt/IOPMLib.h>
 static void check(BOOL condition, NSString *message) {
     if (!condition) { NSLog(@"실패: %@", message); exit(1); }
@@ -78,6 +79,51 @@ static void waitForCommands(CommandStore *store) {
     while (store.refreshing && deadline.timeIntervalSinceNow > 0)
         [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.005]];
     check(!store.refreshing, @"명령 설정 비동기 조회가 완료됩니다.");
+}
+static void appIconTests(void) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSURL *root = [fm.temporaryDirectory URLByAppendingPathComponent:NSUUID.UUID.UUIDString isDirectory:YES];
+    NSURL *app = [root URLByAppendingPathComponent:@"아이콘 테스트.app" isDirectory:YES];
+    [fm createDirectoryAtURL:app withIntermediateDirectories:YES attributes:nil error:nil];
+    NSURL *configuration = [root URLByAppendingPathComponent:@"config.yml"];
+    [@"commands: {}\napp_icons:\n  아이콘 테스트.app: icon.png\n" writeToURL:configuration
+        atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    NSBitmapImageRep *bitmap = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL pixelsWide:32 pixelsHigh:32
+        bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES isPlanar:NO colorSpaceName:NSDeviceRGBColorSpace bytesPerRow:0 bitsPerPixel:0];
+    memset(bitmap.bitmapData, 255, bitmap.bytesPerRow * bitmap.pixelsHigh);
+    NSURL *png = [root URLByAppendingPathComponent:@"icon.png"];
+    [[bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToURL:png atomically:YES];
+    NSURL *logs = [root URLByAppendingPathComponent:@"logs"];
+    EventLog *log = [[EventLog alloc] initWithDirectoryURL:logs filePrefix:@"apply-app-icons"];
+    NSString *first = MLApplyAppIcons(configuration, log);
+    check([first containsString:@"아이콘을 변경했습니다."], first);
+    NSString *second = MLApplyAppIcons(configuration, log);
+    check(second == nil, @"일치하면 알림을 생략합니다.");
+    NSString *mixed = @"app_icons:\n  아이콘 테스트.app: icon.png\n  없는.app: icon.png\n";
+    [mixed writeToURL:configuration atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    NSString *notice = MLApplyAppIcons(configuration, log);
+    check([notice containsString:@"없는.app"] && ![notice containsString:@"아이콘 테스트.app"], @"혼합 결과에서는 실패만 알립니다.");
+    NSURL *file = [fm contentsOfDirectoryAtURL:logs includingPropertiesForKeys:nil options:0 error:nil].firstObject;
+    NSString *records = [NSString stringWithContentsOfURL:file encoding:NSUTF8StringEncoding error:nil];
+    for (NSString *event in @[@"changed", @"matched", @"failed"]) {
+        check([records containsString:[NSString stringWithFormat:@"\"event\":\"%@\"", event]], @"일치·변경·실패를 파일에 기록합니다.");
+    }
+    [@"app_icons: {아이콘 테스트.app: icon.png}" writeToURL:configuration atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    // 같은 흰색 그림을 다른 원본 해상도로 Finder 커스텀 아이콘에 설정합니다.
+    NSImage *other = [NSImage imageWithSize:NSMakeSize(512, 512) flipped:NO drawingHandler:^BOOL(NSRect bounds) {
+        [NSColor.whiteColor setFill];
+        NSRectFill(bounds);
+        return YES;
+    }];
+    check([NSWorkspace.sharedWorkspace setIcon:other forFile:app.path options:0], @"다른 방식으로 아이콘을 설정합니다.");
+    check(MLApplyAppIcons(configuration, log) == nil, @"같은 그림을 다시 적용하지 않습니다.");
+    NSUInteger blackPixel[] = {0, 0, 0, 255};
+    [bitmap setPixel:blackPixel atX:16 y:16];
+    [[bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToURL:png atomically:YES];
+    check([MLApplyAppIcons(configuration, log) containsString:@"아이콘을 변경했습니다."], @"한 픽셀이라도 그림이 바뀌면 적용합니다.");
+    [NSWorkspace.sharedWorkspace setIcon:nil forFile:app.path options:0];
+    check([MLApplyAppIcons(configuration, log) containsString:@"아이콘을 변경했습니다."], @"커스텀 아이콘이 사라지면 다시 적용합니다.");
+    [fm removeItemAtURL:root error:nil];
 }
 static void commandTests(void) {
     NSURL *root = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString]];
@@ -325,7 +371,7 @@ static void sleepLogTests(void) {
     }
     NSURL *other = [root URLByAppendingPathComponent:@"notes.txt"];
     [NSData.data writeToURL:other atomically:YES];
-    SleepLog *log = [[SleepLog alloc] initWithDirectoryURL:root];
+    EventLog *log = [[EventLog alloc] initWithDirectoryURL:root filePrefix:@"caffein"];
     SleepController *controller = [SleepController new];
     controller.log = log;
     check([controller setMode:MLSleepModeSystem error:nil], @"로그를 남기면서 잠자기를 방지합니다.");
@@ -349,7 +395,7 @@ static void sleepLogTests(void) {
 }
 int main(void) {
     @autoreleasepool {
-        commandTests(); recentDirectoryTests(); gestureTests(); catalogTests(); protectedApplicationTests(); groupingTests(); sleepTests(); sleepLogTests();
+        appIconTests(); commandTests(); recentDirectoryTests(); gestureTests(); catalogTests(); protectedApplicationTests(); groupingTests(); sleepTests(); sleepLogTests();
         puts("통과: YAML 명령 설정과 비동기 캐시, Cursor 최근 폴더와 비동기 캐시, 제스처 인식, Finder alias/폴더, Tag 그룹, 잠자기 방지 요청 및 로그 테스트");
     }
     return 0;
