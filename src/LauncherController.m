@@ -40,6 +40,7 @@ static const CGFloat GroupGap = 20;
 @property NSArray<NSDictionary<NSString *, NSString *> *> *commands;
 @property BOOL commandRunning;
 @property NSArray<NSURL *> *directoryURLs;
+@property NSURL *appsURL;
 @property FlippedView *directoryList;
 @property BOOL entering;
 @property BOOL trackingMenu;
@@ -67,6 +68,8 @@ static const CGFloat GroupGap = 20;
     _root = root;
     _directoryURLs = @[];
     _commands = @[];
+    NSURL *appsURL = [NSURL fileURLWithPath:@"/System/Applications/Apps.app" isDirectory:YES];
+    if ([NSWorkspace.sharedWorkspace isFilePackageAtPath:appsURL.path]) _appsURL = appsURL;
     _commandStore = [[CommandStore alloc] initWithURL:[root URLByAppendingPathComponent:@"config.yml"]];
     NSURL *database = [NSURL fileURLWithPath:[NSHomeDirectory() stringByAppendingPathComponent:
         @"Library/Application Support/Cursor/User/globalStorage/state.vscdb"]];
@@ -211,6 +214,7 @@ static const CGFloat GroupGap = 20;
     NSMutableArray<NSString *> *names = [NSMutableArray array];
     for (NSURL *url in self.directoryURLs) [names addObject:url.lastPathComponent];
     for (NSDictionary *command in self.commands) [names addObject:command[@"name"]];
+    if (self.appsURL) [names addObject:@"Apps…"];
     for (NSString *name in names) {
         CGFloat textWidth = [name sizeWithAttributes:@{NSFontAttributeName: [NSFont systemFontOfSize:13]}].width;
         CGFloat itemWidth = MIN(width, ceil(textWidth) + 36);
@@ -250,7 +254,7 @@ static const CGFloat GroupGap = 20;
     NSRect area = self.availableFrame;
     NSInteger capacity = MAX(1, MIN(6, (NSInteger)((NSWidth(area) - SideInset * 2) / CellWidth)));
     self.columns = MAX(1, MIN(capacity, (NSInteger)self.items.count));
-    if (!self.items.count || (self.path.count == 1 && (self.directoryURLs.count || self.commands.count)))
+    if (!self.items.count || (self.path.count == 1 && (self.directoryURLs.count || self.commands.count || self.appsURL)))
         self.columns = MAX(self.columns, MIN(3, capacity));
     CGFloat width = MIN(NSWidth(area), self.columns * CellWidth + SideInset * 2);
     BOOL tail = self.dockPresentation && self.bottomDock;
@@ -488,32 +492,34 @@ static const CGFloat GroupGap = 20;
         [self.directoryList addSubview:separator];
     }
     for (NSUInteger i = 0; i < frames.count; i++) {
-        BOOL isCommand = i >= self.directoryURLs.count;
+        BOOL isApps = i == self.directoryURLs.count + self.commands.count;
+        BOOL isCommand = !isApps && i >= self.directoryURLs.count;
         NSDictionary *command = isCommand ? self.commands[i - self.directoryURLs.count] : nil;
-        NSURL *url = isCommand ? nil : self.directoryURLs[i];
+        NSURL *url = isApps ? self.appsURL : (isCommand ? nil : self.directoryURLs[i]);
         NSRect frame = NSOffsetRect(frames[i].rectValue, 0, 16);
         LauncherDirectoryButton *button = [[LauncherDirectoryButton alloc] initWithFrame:frame];
         button.bordered = NO;
         button.focusRingType = NSFocusRingTypeNone;
-        button.title = isCommand ? command[@"name"] : url.lastPathComponent;
+        button.title = isApps ? @"Apps…" : (isCommand ? command[@"name"] : url.lastPathComponent);
         // 정사각형 앱 아이콘의 보이는 높이를 가로로 긴 폴더 아이콘에 맞춥니다.
-        button.iconPointSize = isCommand ? 15 : 16;
-        button.iconOffsetY = isCommand ? 1 : 0;
+        button.iconPointSize = isCommand || isApps ? 15 : 16;
+        button.iconOffsetY = isCommand || isApps ? 1 : 0;
         button.image = [NSWorkspace.sharedWorkspace iconForFile:isCommand
             ? @"/System/Applications/Utilities/Terminal.app" : url.path];
         __weak LauncherDirectoryButton *weakButton = button;
-        if (!isCommand) MLLoadFolderIcon(url, 16, self.panel.backingScaleFactor, ^(NSImage *image) {
+        if (!isCommand && !isApps) MLLoadFolderIcon(url, 16, self.panel.backingScaleFactor, ^(NSImage *image) {
             LauncherDirectoryButton *currentButton = weakButton;
             currentButton.image = image;
             currentButton.needsDisplay = YES;
         });
-        button.toolTip = isCommand ? command[@"command"] : url.path;
-        button.accessibilityLabel = isCommand ? [NSString stringWithFormat:@"명령 실행: %@", command[@"name"]]
-            : [NSString stringWithFormat:@"Cursor로 열기: %@", url.lastPathComponent];
+        button.toolTip = isApps ? @"모든 앱 탐색" : (isCommand ? command[@"command"] : url.path);
+        button.accessibilityLabel = isApps ? @"Apps에서 모든 앱 탐색"
+            : (isCommand ? [NSString stringWithFormat:@"명령 실행: %@", command[@"name"]]
+            : [NSString stringWithFormat:@"Cursor로 열기: %@", url.lastPathComponent]);
         button.target = self;
         button.action = @selector(choose:);
         button.tag = self.buttons.count;
-        if (!isCommand) button.menu = [self menuForURL:url directory:YES valid:YES];
+        if (!isCommand && !isApps) button.menu = [self menuForURL:url directory:YES valid:YES];
         [self.directoryList addSubview:button];
         [self.buttons addObject:button];
     }
@@ -530,6 +536,22 @@ static const CGFloat GroupGap = 20;
 - (void)choose:(NSButton *)sender { self.selected = sender.tag; [self activateSelection]; }
 - (void)activateSelection {
     if (self.selected < 0 || self.selected >= (NSInteger)self.buttons.count) return;
+    if (self.appsURL && self.selected == (NSInteger)(self.items.count + self.directoryURLs.count + self.commands.count)) {
+        [self hide];
+        [NSWorkspace.sharedWorkspace openApplicationAtURL:self.appsURL
+            configuration:[NSWorkspaceOpenConfiguration configuration]
+            completionHandler:^(NSRunningApplication *app, NSError *error) {
+                (void)app;
+                if (!error) return;
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    NSAlert *alert = [NSAlert new];
+                    alert.messageText = @"Apps를 열지 못했습니다.";
+                    alert.informativeText = error.localizedDescription;
+                    [alert runModal];
+                });
+            }];
+        return;
+    }
     if (self.selected >= (NSInteger)(self.items.count + self.directoryURLs.count)) {
         if (self.commandRunning) return;
         self.commandRunning = YES;
