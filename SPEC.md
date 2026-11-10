@@ -6,8 +6,9 @@
 ## 구성과 빌드
 
 - Objective-C/AppKit 기반의 macOS 13 이상용 상주 런처입니다. Xcode 프로젝트와 외부 패키지는 사용하지 않습니다.
-- Icon Composer를 지원하는 Xcode 26 이상의 CLI 도구로 `./build.sh`를 실행합니다. Xcode GUI와 Apple Developer 계정은 필요하지 않습니다.
-- 현재 Mac의 아키텍처로 빌드하고 `dist/MiniLaunch.app`을 생성합니다. 로컬 ad-hoc 서명만 수행하며 Developer ID와 공증은 포함하지 않습니다.
+- Icon Composer를 지원하는 Xcode 26 이상의 CLI 도구로 `./build.sh`를 실행합니다.
+- 현재 Mac의 아키텍처로 빌드하고 `dist/MiniLaunch.app`을 생성합니다. 앱 식별자는 `local.minilaunch.app`입니다.
+- 빌드 시 키체인의 유효한 Apple Development 인증서를 조회합니다. 하나면 자동 선택하고, 여러 개면 `MINILAUNCH_SIGNING_IDENTITY`로 지문을 지정합니다. 지정한 지문이 조회 결과에 없거나 인증서를 선택할 수 없으면 컴파일 전에 중단합니다. 완성된 번들에 서명하고 무결성 검사를 통과해야 설치할 수 있습니다.
 - 아이콘 원본은 `icon.icon` 하나이며 `actool`로 `Assets.car`와 호환 ICNS를 생성합니다. Command Line Tools만으로는 아이콘을 컴파일할 수 없습니다.
 - `build/`는 매번 재생성하고 컴파일 성공 후 `dist/MiniLaunch.app`을 새로 조립합니다.
 - `--install`은 `~/Applications/MiniLaunch.app`에 복사하며 기존 설치를 덮어쓰지 않습니다.
@@ -160,7 +161,7 @@
 ./test.sh
 ```
 
-- 빌드: 경고를 오류로 처리한 컴파일, 번들 생성, plist 검사, ad-hoc 서명 검사.
+- 빌드: 경고를 오류로 처리한 컴파일, 번들 생성, plist 검사, Apple Development 서명 후 번들 무결성 검사.
 - 자동 테스트: alias·심볼릭 링크·깨진 alias·폴더·Tag·읽기 실패, 시스템 앱 판별, 제스처 방향·시간·접촉 수·중복 방지·잘못된 좌표, Cursor WAL 조회·항목 필터링·캐시 갱신·오류 유지, 실제 IOKit 요청 전환·정리, JSONL 순서·불일치 감지·보관 경계.
 - 자동 테스트는 실제 트랙패드 입력, Space 전환, Dock 위치, 장시간 전원 동작이나 시스템 제스처 차단을 증명하지 않습니다.
 - 각 전원 모드를 설정된 유휴 시간보다 길게 유지한 뒤 수 시간 또는 하룻밤 시험합니다. 화면 꺼짐 허용·시스템 유지, 화면 유지, Off·종료 후 요청 해제를 확인합니다. 다른 앱의 요청도 함께 확인합니다.

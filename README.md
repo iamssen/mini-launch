@@ -8,7 +8,9 @@ Finder alias와 하위 폴더로 앱을 구성하며, Cursor 최근 폴더 열�
 ## 빌드와 설치
 
 macOS 13 이상에서 실행합니다. 빌드에는 Icon Composer를 지원하는 Xcode 26 이상의 CLI 도구가 필요합니다.
-Command Line Tools만으로는 아이콘을 빌드할 수 없습니다. Xcode GUI 실행이나 개발자 계정 로그인은 필요하지 않습니다.
+Command Line Tools만으로는 아이콘을 빌드할 수 없습니다. 서명에는 키체인의 Apple Development 인증서와 대응하는 개인 키가 필요합니다.
+빌드 시 유효한 Apple Development 인증서가 하나면 자동으로 사용합니다. 여러 개면 `security find-identity -v -p codesigning`에서 사용할 지문을 확인해 `MINILAUNCH_SIGNING_IDENTITY` 환경 변수에 지정해 주세요.
+기존 ad-hoc 빌드에서 전환하면 권한을 한 번 다시 허용해야 할 수 있습니다. Dock 위치 연동은 관리 메뉴의 `Advanced → Allow Dock Position Access…`에서 손쉬운 사용 승인을 확인해 주세요. 터미널 명령을 사용한다면 명령을 실행해 iTerm 또는 Terminal에 대한 자동화 승인도 확인해 주세요.
 
 ```sh
 # Xcode 초기 구성 요소가 설치되지 않았다면 한 번 실행합니다.

@@ -9,6 +9,17 @@ if ! xcrun --find clang >/dev/null 2>&1; then
   echo "Command Line Tools가 필요합니다: xcode-select --install" >&2
   exit 1
 fi
+# 개인 키가 있는 유효한 Apple Development 인증서만 선택합니다.
+identities=$(security find-identity -v -p codesigning | awk '$3 == "\"Apple" && $4 == "Development:" {print $2}')
+signing_identity=${MINILAUNCH_SIGNING_IDENTITY:-$identities}
+if [[ -z "$signing_identity" ]]; then
+  echo "키체인에 유효한 Apple Development 서명 인증서가 없습니다." >&2
+  exit 1
+fi
+if [[ "$signing_identity" == *$'\n'* ]] || ! grep -Fxq -- "$signing_identity" <<< "$identities"; then
+  echo "사용할 Apple Development 인증서 지문을 MINILAUNCH_SIGNING_IDENTITY로 지정해 주세요." >&2
+  exit 1
+fi
 # build는 매번 재생성하는 중간 산출물 전용 디렉터리입니다.
 rm -rf build
 mkdir -p build/composer
@@ -29,7 +40,7 @@ cp resources/*.applescript vendor/libyaml/LICENSE dist/MiniLaunch.app/Contents/R
 cp Info.plist dist/MiniLaunch.app/Contents/Info.plist
 /usr/libexec/PlistBuddy -c "Merge build/composer-info.plist" dist/MiniLaunch.app/Contents/Info.plist
 plutil -lint dist/MiniLaunch.app/Contents/Info.plist
-codesign --force --sign - dist/MiniLaunch.app
+codesign --force --sign "$signing_identity" dist/MiniLaunch.app
 codesign --verify --strict dist/MiniLaunch.app
 echo "생성 완료: $PWD/dist/MiniLaunch.app"
 if [[ "${1:-}" == "--install" ]]; then
