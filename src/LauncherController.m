@@ -38,6 +38,7 @@ static const CGFloat GroupGap = 20;
 @property RecentDirectories *recentDirectories;
 @property CommandStore *commandStore;
 @property NSArray<NSDictionary<NSString *, NSString *> *> *commands;
+@property NSArray<NSDictionary<NSString *, NSString *> *> *websites;
 @property BOOL commandRunning;
 @property NSArray<NSURL *> *directoryURLs;
 @property NSURL *appsURL;
@@ -68,6 +69,7 @@ static const CGFloat GroupGap = 20;
     _root = root;
     _directoryURLs = @[];
     _commands = @[];
+    _websites = @[];
     NSURL *appsURL = [NSURL fileURLWithPath:@"/System/Applications/Apps.app" isDirectory:YES];
     if ([NSWorkspace.sharedWorkspace isFilePackageAtPath:appsURL.path]) _appsURL = appsURL;
     _commandStore = [[CommandStore alloc] initWithURL:[root URLByAppendingPathComponent:@"config.yml"]];
@@ -213,6 +215,7 @@ static const CGFloat GroupGap = 20;
     CGFloat x = 0, y = 0;
     NSMutableArray<NSString *> *names = [NSMutableArray array];
     for (NSURL *url in self.directoryURLs) [names addObject:url.lastPathComponent];
+    for (NSDictionary *website in self.websites) [names addObject:website[@"name"]];
     for (NSDictionary *command in self.commands) [names addObject:command[@"name"]];
     if (self.appsURL) [names addObject:@"Apps…"];
     for (NSString *name in names) {
@@ -244,8 +247,10 @@ static const CGFloat GroupGap = 20;
     if (self.commandStore.error) [self showError:self.commandStore.error.localizedDescription];
     else self.statusLabel.hidden = YES;
     if ([self.directoryURLs isEqualToArray:self.recentDirectories.directories] &&
+        [self.websites isEqualToArray:self.commandStore.websites] &&
         [self.commands isEqualToArray:self.commandStore.commands]) return;
     self.directoryURLs = self.recentDirectories.directories;
+    self.websites = self.commandStore.websites;
     self.commands = self.commandStore.commands;
     [self layout];
     [self renderItems];
@@ -254,7 +259,7 @@ static const CGFloat GroupGap = 20;
     NSRect area = self.availableFrame;
     NSInteger capacity = MAX(1, MIN(6, (NSInteger)((NSWidth(area) - SideInset * 2) / CellWidth)));
     self.columns = MAX(1, MIN(capacity, (NSInteger)self.items.count));
-    if (!self.items.count || (self.path.count == 1 && (self.directoryURLs.count || self.commands.count || self.appsURL)))
+    if (!self.items.count || (self.path.count == 1 && (self.directoryURLs.count || self.websites.count || self.commands.count || self.appsURL)))
         self.columns = MAX(self.columns, MIN(3, capacity));
     CGFloat width = MIN(NSWidth(area), self.columns * CellWidth + SideInset * 2);
     BOOL tail = self.dockPresentation && self.bottomDock;
@@ -420,6 +425,7 @@ static const CGFloat GroupGap = 20;
 }
 - (void)reload {
     self.directoryURLs = self.recentDirectories.directories;
+    self.websites = self.commandStore.websites;
     self.commands = self.commandStore.commands;
     NSError *error = nil;
     NSArray *catalog = [AppCatalog itemsAtURL:self.path.lastObject error:&error];
@@ -491,35 +497,43 @@ static const CGFloat GroupGap = 20;
         separator.boxType = NSBoxSeparator;
         [self.directoryList addSubview:separator];
     }
+    NSUInteger commandStart = self.directoryURLs.count + self.websites.count;
+    NSUInteger appsIndex = commandStart + self.commands.count;
+    NSString *safariPath = self.websites.count
+        ? [NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:@"com.apple.Safari"].path : nil;
     for (NSUInteger i = 0; i < frames.count; i++) {
-        BOOL isApps = i == self.directoryURLs.count + self.commands.count;
-        BOOL isCommand = !isApps && i >= self.directoryURLs.count;
-        NSDictionary *command = isCommand ? self.commands[i - self.directoryURLs.count] : nil;
-        NSURL *url = isApps ? self.appsURL : (isCommand ? nil : self.directoryURLs[i]);
+        BOOL isDirectory = i < self.directoryURLs.count;
+        BOOL isWebsite = !isDirectory && i < commandStart;
+        BOOL isCommand = i >= commandStart && i < appsIndex;
+        BOOL isApps = i == appsIndex;
+        NSDictionary *entry = isWebsite ? self.websites[i - self.directoryURLs.count]
+            : (isCommand ? self.commands[i - commandStart] : nil);
+        NSURL *url = isApps ? self.appsURL : (isDirectory ? self.directoryURLs[i] : nil);
         NSRect frame = NSOffsetRect(frames[i].rectValue, 0, 16);
         LauncherDirectoryButton *button = [[LauncherDirectoryButton alloc] initWithFrame:frame];
         button.bordered = NO;
         button.focusRingType = NSFocusRingTypeNone;
-        button.title = isApps ? @"Apps…" : (isCommand ? command[@"name"] : url.lastPathComponent);
+        button.title = isApps ? @"Apps…" : (isDirectory ? url.lastPathComponent : entry[@"name"]);
         // 정사각형 앱 아이콘의 보이는 높이를 가로로 긴 폴더 아이콘에 맞춥니다.
-        button.iconPointSize = isCommand || isApps ? 15 : 16;
-        button.iconOffsetY = isCommand || isApps ? 1 : 0;
-        button.image = [NSWorkspace.sharedWorkspace iconForFile:isCommand
-            ? @"/System/Applications/Utilities/Terminal.app" : url.path];
+        button.iconPointSize = isDirectory ? 16 : 15;
+        button.iconOffsetY = isDirectory ? 0 : 1;
+        NSString *iconPath = isWebsite ? (safariPath ?: @"/Applications/Safari.app")
+            : (isCommand ? @"/System/Applications/Utilities/Terminal.app" : url.path);
+        button.image = [NSWorkspace.sharedWorkspace iconForFile:iconPath];
         __weak LauncherDirectoryButton *weakButton = button;
-        if (!isCommand && !isApps) MLLoadFolderIcon(url, 16, self.panel.backingScaleFactor, ^(NSImage *image) {
+        if (isDirectory) MLLoadFolderIcon(url, 16, self.panel.backingScaleFactor, ^(NSImage *image) {
             LauncherDirectoryButton *currentButton = weakButton;
             currentButton.image = image;
             currentButton.needsDisplay = YES;
         });
-        button.toolTip = isApps ? @"모든 앱 탐색" : (isCommand ? command[@"command"] : url.path);
+        button.toolTip = isApps ? @"모든 앱 탐색" : (isDirectory ? url.path : entry[isWebsite ? @"url" : @"command"]);
         button.accessibilityLabel = isApps ? @"Apps에서 모든 앱 탐색"
-            : (isCommand ? [NSString stringWithFormat:@"명령 실행: %@", command[@"name"]]
-            : [NSString stringWithFormat:@"Cursor로 열기: %@", url.lastPathComponent]);
+            : (isDirectory ? [NSString stringWithFormat:@"Cursor로 열기: %@", url.lastPathComponent]
+            : [NSString stringWithFormat:isWebsite ? @"기본 브라우저로 열기: %@" : @"명령 실행: %@", entry[@"name"]]);
         button.target = self;
         button.action = @selector(choose:);
         button.tag = self.buttons.count;
-        if (!isCommand && !isApps) button.menu = [self menuForURL:url directory:YES valid:YES];
+        if (isDirectory) button.menu = [self menuForURL:url directory:YES valid:YES];
         [self.directoryList addSubview:button];
         [self.buttons addObject:button];
     }
@@ -536,7 +550,9 @@ static const CGFloat GroupGap = 20;
 - (void)choose:(NSButton *)sender { self.selected = sender.tag; [self activateSelection]; }
 - (void)activateSelection {
     if (self.selected < 0 || self.selected >= (NSInteger)self.buttons.count) return;
-    if (self.appsURL && self.selected == (NSInteger)(self.items.count + self.directoryURLs.count + self.commands.count)) {
+    NSUInteger websiteStart = self.items.count + self.directoryURLs.count;
+    NSUInteger commandStart = websiteStart + self.websites.count;
+    if (self.appsURL && self.selected == (NSInteger)(commandStart + self.commands.count)) {
         [self hide];
         [NSWorkspace.sharedWorkspace openApplicationAtURL:self.appsURL
             configuration:[NSWorkspaceOpenConfiguration configuration]
@@ -552,10 +568,10 @@ static const CGFloat GroupGap = 20;
             }];
         return;
     }
-    if (self.selected >= (NSInteger)(self.items.count + self.directoryURLs.count)) {
+    if (self.selected >= (NSInteger)commandStart) {
         if (self.commandRunning) return;
         self.commandRunning = YES;
-        NSString *command = self.commands[self.selected - self.items.count - self.directoryURLs.count][@"command"];
+        NSString *command = self.commands[self.selected - commandStart][@"command"];
         __weak typeof(self) weakSelf = self;
         [TerminalCommand run:command completion:^(NSString *error) {
             weakSelf.commandRunning = NO;
@@ -567,6 +583,12 @@ static const CGFloat GroupGap = 20;
                 [alert runModal];
             } else [weakSelf hide];
         }];
+        return;
+    }
+    if (self.selected >= (NSInteger)websiteStart) {
+        NSURL *url = [NSURL URLWithString:self.websites[self.selected - websiteStart][@"url"]];
+        if ([NSWorkspace.sharedWorkspace openURL:url]) [self hide];
+        else { [self showError:@"웹사이트를 열지 못했습니다. 기본 브라우저 설정을 확인해 주세요."]; NSBeep(); }
         return;
     }
     if (self.selected >= (NSInteger)self.items.count) {

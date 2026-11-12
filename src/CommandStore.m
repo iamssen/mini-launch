@@ -24,7 +24,7 @@ static NSString *Scalar(yaml_node_t *node) {
 }
 - (instancetype)initWithURL:(NSURL *)url {
     if (!(self = [super init])) return nil;
-    _url = url; _commands = @[];
+    _url = url; _commands = @[]; _websites = @[];
     _queue = dispatch_queue_create("local.minilaunch.commands", DISPATCH_QUEUE_SERIAL);
     return self;
 }
@@ -36,7 +36,13 @@ static NSString *Scalar(yaml_node_t *node) {
         return NO;
     }
     NSString *initial =
-        @"# MiniLaunch 터미널 명령 설정\n"
+        @"# MiniLaunch 웹사이트·터미널 명령 설정\n"
+         "# 웹사이트 이름: http(s) URL 형식으로 작성한 순서대로 표시합니다.\n"
+         "# 최근 Cursor 폴더와 명령 사이에 표시하며 기본 브라우저로 엽니다.\n"
+         "# websites:\n"
+         "#   \"dagu:local\": \"http://localhost:8480\"\n"
+         "websites: {}\n"
+         "\n"
          "# 명령 이름: 실행할 명령 형식으로 작성한 순서대로 표시합니다.\n"
          "# 클릭하면 iTerm의 새 창에서 실행하며, iTerm이 없으면 Terminal을 사용합니다.\n"
          "# 터미널 기본 프로필의 셸과 시작 위치를 그대로 사용합니다.\n"
@@ -65,21 +71,25 @@ static NSString *Scalar(yaml_node_t *node) {
     return NO;
 }
 + (NSArray<NSDictionary<NSString *, NSString *> *> *)commandsAtURL:(NSURL *)url error:(NSError **)error {
-    return [self entriesAtURL:url section:@"commands" error:error];
+    return [self entriesAtURL:url sections:@[@"commands"] error:error][@"commands"];
+}
++ (NSArray<NSDictionary<NSString *, NSString *> *> *)websitesAtURL:(NSURL *)url error:(NSError **)error {
+    return [self entriesAtURL:url sections:@[@"websites"] error:error][@"websites"];
 }
 + (NSArray<NSDictionary<NSString *, NSString *> *> *)appIconsAtURL:(NSURL *)url error:(NSError **)error {
-    return [self entriesAtURL:url section:@"app_icons" error:error];
+    return [self entriesAtURL:url sections:@[@"app_icons"] error:error][@"app_icons"];
 }
-+ (NSArray *)entriesAtURL:(NSURL *)url section:(NSString *)section error:(NSError **)error {
-    BOOL icons = [section isEqualToString:@"app_icons"];
++ (NSDictionary *)entriesAtURL:(NSURL *)url sections:(NSArray<NSString *> *)sections error:(NSError **)error {
+    NSMutableDictionary<NSString *, NSMutableArray *> *result = [NSMutableDictionary dictionary];
+    for (NSString *section in sections) result[section] = [NSMutableArray array];
     NSError *readError = nil;
     NSData *data = [NSData dataWithContentsOfURL:url options:0 error:&readError];
     if (!data) {
-        if ([readError.domain isEqualToString:NSCocoaErrorDomain] && readError.code == NSFileReadNoSuchFileError) return @[];
+        if ([readError.domain isEqualToString:NSCocoaErrorDomain] && readError.code == NSFileReadNoSuchFileError) return result;
         if (error) *error = readError;
         return nil;
     }
-    if (!data.length) return @[];
+    if (!data.length) return result;
     if (data.length > 256 * 1024) {
         if (error) *error = ConfigError(@"config.yml은 256KiB 이하여야 합니다.");
         return nil;
@@ -91,7 +101,6 @@ static NSString *Scalar(yaml_node_t *node) {
     }
     yaml_parser_set_input_string(&parser, data.bytes, data.length);
     yaml_document_t document;
-    NSMutableArray *commands = [NSMutableArray array];
     NSString *problem = nil;
     if (!yaml_parser_load(&parser, &document)) {
         problem = [NSString stringWithFormat:@"config.yml %zu행: %s", parser.problem_mark.line + 1,
@@ -105,21 +114,38 @@ static NSString *Scalar(yaml_node_t *node) {
             NSString *key = Scalar(yaml_document_get_node(&document, pair->key));
             if (!key || [rootKeys containsObject:key]) { problem = @"설정 키는 중복되지 않는 문자열이어야 합니다."; break; }
             [rootKeys addObject:key];
-            if (![key isEqualToString:section]) continue;
+            if (![sections containsObject:key]) continue;
+            BOOL icons = [key isEqualToString:@"app_icons"];
+            BOOL websites = [key isEqualToString:@"websites"];
+            NSString *mappingError = icons ? @"app_icons는 앱 경로와 PNG 경로의 매핑이어야 합니다."
+                : (websites ? @"websites는 이름과 웹사이트 URL의 매핑이어야 합니다."
+                : @"commands는 이름과 명령 문자열의 매핑이어야 합니다.");
+            NSString *entryError = icons ? @"앱과 PNG 경로는 비어 있지 않은 문자열이어야 하며 앱 경로를 중복할 수 없습니다."
+                : (websites ? @"웹사이트 이름과 URL은 비어 있지 않은 문자열이어야 하며 이름을 중복할 수 없습니다."
+                : @"명령 이름과 본문은 비어 있지 않은 문자열이어야 하며 이름을 중복할 수 없습니다.");
             yaml_node_t *mapping = yaml_document_get_node(&document, pair->value);
-            if (mapping->type != YAML_MAPPING_NODE) { problem = icons ? @"app_icons는 앱 경로와 PNG 경로의 매핑이어야 합니다." : @"commands는 이름과 명령 문자열의 매핑이어야 합니다."; break; }
+            if (mapping->type != YAML_MAPPING_NODE) { problem = mappingError; break; }
             NSMutableSet *names = [NSMutableSet set];
             for (yaml_node_pair_t *entry = mapping->data.mapping.pairs.start; entry < mapping->data.mapping.pairs.top; entry++) {
                 NSString *name = Scalar(yaml_document_get_node(&document, entry->key));
-                NSString *command = Scalar(yaml_document_get_node(&document, entry->value));
+                NSString *value = Scalar(yaml_document_get_node(&document, entry->value));
                 NSCharacterSet *space = NSCharacterSet.whitespaceAndNewlineCharacterSet;
                 if (![name stringByTrimmingCharactersInSet:space].length ||
-                    ![command stringByTrimmingCharactersInSet:space].length || [names containsObject:name] ||
-                    [name rangeOfString:@"\0"].location != NSNotFound || [command rangeOfString:@"\0"].location != NSNotFound) {
-                    problem = icons ? @"앱과 PNG 경로는 비어 있지 않은 문자열이어야 하며 앱 경로를 중복할 수 없습니다." : @"명령 이름과 본문은 비어 있지 않은 문자열이어야 하며 이름을 중복할 수 없습니다."; break;
+                    ![value stringByTrimmingCharactersInSet:space].length || [names containsObject:name] ||
+                    [name rangeOfString:@"\0"].location != NSNotFound || [value rangeOfString:@"\0"].location != NSNotFound) {
+                    problem = entryError; break;
+                }
+                if (websites) {
+                    NSURL *website = [NSURL URLWithString:value];
+                    if (!website.host.length || ![@[@"http", @"https"] containsObject:website.scheme.lowercaseString]) {
+                        problem = [NSString stringWithFormat:@"웹사이트 '%@'의 URL은 호스트가 있는 http 또는 https 주소여야 합니다.", name];
+                        break;
+                    }
                 }
                 [names addObject:name];
-                [commands addObject:icons ? @{@"app": name, @"png": command} : @{@"name": name, @"command": command}];
+                NSString *nameKey = icons ? @"app" : @"name";
+                NSString *valueKey = icons ? @"png" : (websites ? @"url" : @"command");
+                [result[key] addObject:@{nameKey: name, valueKey: value}];
             }
             if (problem) break;
         }
@@ -135,7 +161,7 @@ static NSString *Scalar(yaml_node_t *node) {
     }
     yaml_parser_delete(&parser);
     if (problem) { if (error) *error = ConfigError(problem); return nil; }
-    return commands;
+    return result;
 }
 - (void)refresh {
     NSAssert(NSThread.isMainThread, @"설정 갱신은 메인 스레드에서 요청합니다.");
@@ -146,14 +172,16 @@ static NSString *Scalar(yaml_node_t *node) {
     dispatch_async(_queue, ^{
         @autoreleasepool {
             NSError *error = nil;
-            NSArray *commands = [CommandStore commandsAtURL:url error:&error];
+            NSDictionary *entries = [CommandStore entriesAtURL:url sections:@[@"commands", @"websites"] error:&error];
+            NSArray *commands = entries[@"commands"];
+            NSArray *websites = entries[@"websites"];
             dispatch_async(dispatch_get_main_queue(), ^{
                 CommandStore *s = weakSelf;
                 if (!s) return;
                 s->_refreshing = NO;
-                BOOL changed = commands && ![s.commands isEqualToArray:commands];
+                BOOL changed = entries && (![s.commands isEqualToArray:commands] || ![s.websites isEqualToArray:websites]);
                 BOOL errorChanged = ![(s.error.localizedDescription ?: @"") isEqualToString:error.localizedDescription ?: @""];
-                if (commands) s->_commands = [commands copy];
+                if (entries) { s->_commands = [commands copy]; s->_websites = [websites copy]; }
                 s->_error = error;
                 if ((changed || errorChanged) && s.didRefresh) s.didRefresh();
             });

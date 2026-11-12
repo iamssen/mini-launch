@@ -134,9 +134,10 @@ static void commandTests(void) {
     check([CommandStore commandsAtURL:url error:&error].count == 0 && !error, @"없는 설정 파일은 명령 없는 정상 상태입니다.");
     check([CommandStore ensureConfigurationAtURL:url error:&error] && !error, @"메뉴에서 없는 설정 파일을 생성합니다.");
     NSString *initial = [NSString stringWithContentsOfURL:url encoding:NSUTF8StringEncoding error:nil];
-    check([initial containsString:@"commands: {}\n"] && [initial containsString:@"# 한 줄 명령 예시:"] &&
+    check([initial containsString:@"websites: {}\n"] && [initial containsString:@"commands: {}\n"] && [initial containsString:@"# 한 줄 명령 예시:"] &&
         [initial containsString:@"# 여러 줄 명령"], @"기본 설정과 한국어 주석 안내를 포함합니다.");
     check([CommandStore commandsAtURL:url error:&error].count == 0 && !error, @"생성한 기본 설정은 유효한 빈 명령 목록입니다.");
+    check([CommandStore websitesAtURL:url error:&error].count == 0 && !error, @"생성한 기본 설정은 유효한 빈 웹사이트 목록입니다.");
     [@"" writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:nil];
     check([CommandStore commandsAtURL:url error:&error].count == 0 && !error, @"빈 설정 파일은 빈 목록입니다.");
     NSString *yaml = @"commands:\n  \"server:ssh\": ssh -t user@host \"echo test\" # 주석\n  여러줄: |\n    cd Workspace\n    ls -al\n";
@@ -190,6 +191,66 @@ static void commandTests(void) {
     [fm createDirectoryAtURL:url withIntermediateDirectories:NO attributes:nil error:nil];
     error = nil;
     check(![CommandStore ensureConfigurationAtURL:url error:&error] && error, @"설정 경로가 폴더이면 생성 실패를 알립니다.");
+    [fm removeItemAtURL:root error:nil];
+}
+static void websiteTests(void) {
+    NSURL *root = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString]];
+    NSFileManager *fm = NSFileManager.defaultManager;
+    [fm createDirectoryAtURL:root withIntermediateDirectories:YES attributes:nil error:nil];
+    NSURL *url = [root URLByAppendingPathComponent:@"config.yml"];
+    NSError *error = nil;
+    check([CommandStore websitesAtURL:url error:&error].count == 0 && !error, @"없는 설정 파일은 웹사이트 없는 정상 상태입니다.");
+    [@"" writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    check([CommandStore websitesAtURL:url error:&error].count == 0 && !error, @"빈 설정 파일은 웹사이트 없는 정상 상태입니다.");
+    NSString *yaml = @"commands: {명령: pwd}\nwebsites:\n  'dagu:local': 'http://localhost:8480'\n  검색: 'https://example.com/search?q=hello&lang=ko#결과'\napp_icons: {}\n";
+    [yaml writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    NSArray *websites = [CommandStore websitesAtURL:url error:&error];
+    check(!error && [websites isEqualToArray:@[
+        @{@"name": @"dagu:local", @"url": @"http://localhost:8480"},
+        @{@"name": @"검색", @"url": @"https://example.com/search?q=hello&lang=ko#결과"}]],
+        @"웹사이트 작성 순서와 이름·포트·쿼리·앵커를 보존합니다.");
+    CommandStore *store = [[CommandStore alloc] initWithURL:url];
+    __block NSUInteger notifications = 0;
+    store.didRefresh = ^{ check(NSThread.isMainThread, @"웹사이트 갱신은 메인 스레드에 전달됩니다."); notifications++; };
+    [store refresh]; [store refresh];
+    check(store.refreshing && !store.websites.count, @"웹사이트도 비동기로 조회하며 중복 요청을 합칩니다.");
+    waitForCommands(store);
+    NSArray *commands = store.commands;
+    check([store.websites isEqualToArray:websites] && commands.count == 1 && notifications == 1,
+        @"한 설정의 웹사이트와 명령을 함께 캐시합니다.");
+    [store refresh]; waitForCommands(store);
+    check(notifications == 1, @"같은 웹사이트와 명령은 화면 갱신을 요청하지 않습니다.");
+    NSString *changed = [yaml stringByReplacingOccurrencesOfString:@"localhost:8480" withString:@"localhost:8481"];
+    [changed writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    [store refresh]; waitForCommands(store);
+    websites = [CommandStore websitesAtURL:url error:&error];
+    check([store.websites isEqualToArray:websites] && [store.commands isEqualToArray:commands] && notifications == 2,
+        @"명령이 같아도 웹사이트 URL 변경을 알립니다.");
+    NSArray *invalid = @[@"websites: [x]", @"websites: {x: 'https://example.com', x: 'https://example.org'}",
+        @"websites: {x: 123}", @"websites: {x: true}", @"websites: {x: []}", @"websites: {x: ''}",
+        @"websites: {'': 'https://example.com'}", @"websites: {x: null}", @"websites: {x: 'example.com'}",
+        @"websites: {x: 'https:///path'}", @"websites: {x: 'file:///tmp/example.html'}",
+        @"websites: {x: 'javascript:alert(1)'}", @"websites: {x: 'ftp://example.com'}",
+        @"websites: {}\nwebsites: {}"];
+    for (NSString *text in invalid) {
+        [[@"commands: {변경: ls}\n" stringByAppendingString:text] writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        error = nil;
+        check(![CommandStore websitesAtURL:url error:&error] && error,
+            @"웹사이트의 잘못된 형식·중복·빈 값·호스트 없는 주소·HTTP 이외의 스킴을 거부합니다.");
+    }
+    [store refresh]; waitForCommands(store);
+    check(store.error && [store.websites isEqualToArray:websites] && [store.commands isEqualToArray:commands],
+        @"웹사이트 설정에 오류가 있으면 웹사이트와 명령 모두 마지막 정상 캐시를 유지합니다.");
+    [@"commands: {명령: pwd}" writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    [store refresh]; waitForCommands(store);
+    check(!store.error && !store.websites.count && [store.commands isEqualToArray:commands],
+        @"websites 항목을 지우면 웹사이트만 비웁니다.");
+    [@"websites: {로컬: 'http://127.0.0.1:8480'}" writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    [store refresh]; waitForCommands(store);
+    check(!store.error && store.websites.count == 1 && !store.commands.count, @"명령 없이 웹사이트만 설정할 수 있습니다.");
+    [fm removeItemAtURL:url error:nil];
+    [store refresh]; waitForCommands(store);
+    check(!store.error && !store.websites.count && !store.commands.count, @"설정 파일 삭제는 웹사이트와 명령을 비웁니다.");
     [fm removeItemAtURL:root error:nil];
 }
 static void gestureTests(void) {
@@ -395,8 +456,8 @@ static void sleepLogTests(void) {
 }
 int main(void) {
     @autoreleasepool {
-        appIconTests(); commandTests(); recentDirectoryTests(); gestureTests(); catalogTests(); protectedApplicationTests(); groupingTests(); sleepTests(); sleepLogTests();
-        puts("통과: YAML 명령 설정과 비동기 캐시, Cursor 최근 폴더와 비동기 캐시, 제스처 인식, Finder alias/폴더, Tag 그룹, 잠자기 방지 요청 및 로그 테스트");
+        appIconTests(); commandTests(); websiteTests(); recentDirectoryTests(); gestureTests(); catalogTests(); protectedApplicationTests(); groupingTests(); sleepTests(); sleepLogTests();
+        puts("통과: YAML 웹사이트·명령 설정과 비동기 캐시, Cursor 최근 폴더와 비동기 캐시, 제스처 인식, Finder alias/폴더, Tag 그룹, 잠자기 방지 요청 및 로그 테스트");
     }
     return 0;
 }
