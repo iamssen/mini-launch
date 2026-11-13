@@ -1,7 +1,8 @@
 #import <Cocoa/Cocoa.h>
 #import <ApplicationServices/ApplicationServices.h>
 #import "LauncherController.h"
-#import "CommandStore.h"
+#import "ConfigStore.h"
+#import "ExternalApps.h"
 #import "AppIconUpdater.h"
 #import "GestureMonitor.h"
 #import "SleepController.h"
@@ -24,11 +25,14 @@
     NSString *root = [NSUserDefaults.standardUserDefaults stringForKey:@"AppsDirectory"] ?: @"~/Apps";
     return [NSURL fileURLWithPath:root.stringByExpandingTildeInPath].URLByStandardizingPath;
 }
+- (NSURL *)configurationURL {
+    return [ConfigStore configurationURLInDirectory:self.appsDirectoryURL];
+}
 - (NSString *)openFolderMenuTitle {
     return [@"Open " stringByAppendingString:self.appsDirectoryURL.path.stringByAbbreviatingWithTildeInPath];
 }
 - (NSMenuItem *)openConfigMenuItem {
-    NSString *path = [self.appsDirectoryURL URLByAppendingPathComponent:@"config.yml"].path;
+    NSString *path = self.configurationURL.path;
     NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:[@"Open " stringByAppendingString:path.stringByAbbreviatingWithTildeInPath]
         action:@selector(openConfig:) keyEquivalent:@""];
     item.target = self;
@@ -139,7 +143,7 @@
 - (void)applyAppIcons:(id)sender {
     if (self.applyingAppIcons) return;
     self.applyingAppIcons = YES;
-    NSURL *configuration = [self.appsDirectoryURL URLByAppendingPathComponent:@"config.yml"];
+    NSURL *configuration = self.configurationURL;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSString *result = MLApplyAppIcons(configuration, self.appIconLog);
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -261,16 +265,16 @@
 }
 - (void)openConfig:(id)sender {
     (void)sender;
-    NSURL *cursor = [NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:@"com.todesktop.230313mzl4w4u92"];
+    NSURL *cursor = [NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:MLCursorBundleIdentifier];
     if (!cursor) {
         NSAlert *alert = [NSAlert new];
         alert.messageText = @"Cursor가 설치되어 있지 않습니다.";
         [alert runModal];
         return;
     }
-    NSURL *config = [self.appsDirectoryURL URLByAppendingPathComponent:@"config.yml"];
+    NSURL *config = self.configurationURL;
     NSError *creationError = nil;
-    if (![CommandStore ensureConfigurationAtURL:config error:&creationError]) {
+    if (![ConfigStore ensureConfigurationAtURL:config error:&creationError]) {
         NSAlert *alert = [NSAlert new];
         alert.messageText = @"설정 파일을 준비하지 못했습니다.";
         alert.informativeText = [NSString stringWithFormat:@"%@\n%@", config.path, creationError.localizedDescription];

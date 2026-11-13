@@ -11,6 +11,8 @@
 // 오른클릭과 Control-클릭은 기본 실행 대신 항목 메뉴를 엽니다.
 @interface LauncherActionButton : NSButton
 @property (nonatomic) BOOL selected;
+// 실행 대상(MLItem 또는 MLShortcut)입니다. 버튼 순서로 대상을 다시 계산하지 않습니다.
+@property (nonatomic) id representedEntry;
 @end
 
 @interface LauncherDirectoryButton : LauncherActionButton

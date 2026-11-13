@@ -2,7 +2,7 @@
 #import <CoreServices/CoreServices.h>
 #import <sys/xattr.h>
 #import "AppIconUpdater.h"
-#import "CommandStore.h"
+#import "ConfigStore.h"
 #import "EventLog.h"
 
 static NSURL *ResolvePath(NSString *path, NSURL *directory) {
@@ -141,7 +141,7 @@ static NSString *ApplyIcon(NSURL *app, NSURL *png, NSURL *reference, NSString **
 
 NSString *MLApplyAppIcons(NSURL *configuration, EventLog *log) {
     NSError *error = nil;
-    NSArray *entries = [CommandStore appIconsAtURL:configuration error:&error];
+    NSArray<MLConfigEntry *> *entries = [ConfigStore appIconsAtURL:configuration error:&error];
     if (!entries.count) {
         NSString *message = error.localizedDescription ?: @"config.yml의 app_icons에 앱 경로와 PNG 경로를 지정해 주세요.";
         [log recordEvent:@"configuration_error" fields:@{@"config": configuration.path, @"message": message}];
@@ -155,10 +155,11 @@ NSString *MLApplyAppIcons(NSURL *configuration, EventLog *log) {
         return error.localizedDescription;
     }
     NSMutableArray *results = [NSMutableArray array];
-    for (NSDictionary *entry in entries) {
+    for (MLConfigEntry *entry in entries) {
         @autoreleasepool {
-            NSURL *app = ResolvePath(entry[@"app"], directory);
-            NSURL *png = ResolvePath(entry[@"png"], directory);
+            // app_icons 매핑은 앱 경로가 이름, PNG 경로가 값입니다.
+            NSURL *app = ResolvePath(entry.name, directory);
+            NSURL *png = ResolvePath(entry.value, directory);
             NSString *event;
             NSString *result = ApplyIcon(app, png, reference, &event);
             [log recordEvent:event fields:@{@"app": app.path, @"png": png.path, @"message": result}];

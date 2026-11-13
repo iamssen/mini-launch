@@ -1,8 +1,9 @@
 #import "TerminalCommand.h"
+#import "ExternalApps.h"
 
 @implementation TerminalCommand
 + (void)run:(NSString *)command completion:(void (^)(NSString *error))completion {
-    BOOL iterm = [NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:@"com.googlecode.iterm2"] != nil;
+    BOOL iterm = [NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:MLITermBundleIdentifier] != nil;
     NSString *script = [NSBundle.mainBundle pathForResource:iterm ? @"iTermCommand" : @"TerminalCommand" ofType:@"applescript"];
     if (!script) { completion(@"터미널 실행 리소스를 찾을 수 없습니다."); return; }
     // argv로 본문을 전달하여 AppleScript 코드와 명령 데이터를 분리합니다.

@@ -1,7 +1,8 @@
 #import <Cocoa/Cocoa.h>
 #import "AppCatalog.h"
 #import "RecentDirectories.h"
-#import "CommandStore.h"
+#import "ConfigStore.h"
+#import "LauncherShortcut.h"
 #import "AppIconUpdater.h"
 #import <sqlite3.h>
 #import "GestureRecognizer.h"
@@ -74,7 +75,7 @@ static void recentDirectoryTests(void) {
     check(![fm fileExistsAtPath:missing.path], @"읽기 전용 조회는 없는 저장소를 만들지 않습니다.");
     [fm removeItemAtURL:root error:nil];
 }
-static void waitForCommands(CommandStore *store) {
+static void waitForCommands(ConfigStore *store) {
     NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:3];
     while (store.refreshing && deadline.timeIntervalSinceNow > 0)
         [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.005]];
@@ -131,31 +132,31 @@ static void commandTests(void) {
     [fm createDirectoryAtURL:root withIntermediateDirectories:YES attributes:nil error:nil];
     NSURL *url = [root URLByAppendingPathComponent:@"config.yml"];
     NSError *error = nil;
-    check([CommandStore commandsAtURL:url error:&error].count == 0 && !error, @"없는 설정 파일은 명령 없는 정상 상태입니다.");
-    check([CommandStore ensureConfigurationAtURL:url error:&error] && !error, @"메뉴에서 없는 설정 파일을 생성합니다.");
+    check([ConfigStore commandsAtURL:url error:&error].count == 0 && !error, @"없는 설정 파일은 명령 없는 정상 상태입니다.");
+    check([ConfigStore ensureConfigurationAtURL:url error:&error] && !error, @"메뉴에서 없는 설정 파일을 생성합니다.");
     NSString *initial = [NSString stringWithContentsOfURL:url encoding:NSUTF8StringEncoding error:nil];
     check([initial containsString:@"websites: {}\n"] && [initial containsString:@"commands: {}\n"] && [initial containsString:@"# 한 줄 명령 예시:"] &&
         [initial containsString:@"# 여러 줄 명령"], @"기본 설정과 한국어 주석 안내를 포함합니다.");
-    check([CommandStore commandsAtURL:url error:&error].count == 0 && !error, @"생성한 기본 설정은 유효한 빈 명령 목록입니다.");
-    check([CommandStore websitesAtURL:url error:&error].count == 0 && !error, @"생성한 기본 설정은 유효한 빈 웹사이트 목록입니다.");
+    check([ConfigStore commandsAtURL:url error:&error].count == 0 && !error, @"생성한 기본 설정은 유효한 빈 명령 목록입니다.");
+    check([ConfigStore websitesAtURL:url error:&error].count == 0 && !error, @"생성한 기본 설정은 유효한 빈 웹사이트 목록입니다.");
     [@"" writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    check([CommandStore commandsAtURL:url error:&error].count == 0 && !error, @"빈 설정 파일은 빈 목록입니다.");
+    check([ConfigStore commandsAtURL:url error:&error].count == 0 && !error, @"빈 설정 파일은 빈 목록입니다.");
     NSString *yaml = @"commands:\n  \"server:ssh\": ssh -t user@host \"echo test\" # 주석\n  여러줄: |\n    cd Workspace\n    ls -al\n";
     [yaml writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    check([CommandStore ensureConfigurationAtURL:url error:&error] &&
+    check([ConfigStore ensureConfigurationAtURL:url error:&error] &&
         [[NSString stringWithContentsOfURL:url encoding:NSUTF8StringEncoding error:nil] isEqualToString:yaml],
         @"설정 열기는 기존 파일의 명령과 주석을 덮어쓰지 않습니다.");
-    NSArray *commands = [CommandStore commandsAtURL:url error:&error];
+    NSArray<MLConfigEntry *> *commands = [ConfigStore commandsAtURL:url error:&error];
     CFAbsoluteTime started = CFAbsoluteTimeGetCurrent();
     for (NSUInteger i = 0; i < 1000; i++) {
-        @autoreleasepool { [CommandStore commandsAtURL:url error:nil]; }
+        @autoreleasepool { [ConfigStore commandsAtURL:url error:nil]; }
     }
     NSLog(@"설정 읽기와 YAML 해석 평균: %.3fms (소규모 로컬 설정, 반복 조회)",
           (CFAbsoluteTimeGetCurrent() - started) * 1000 / 1000);
-    check(commands.count == 2 && [commands[0][@"name"] isEqualToString:@"server:ssh"] &&
-          [commands[0][@"command"] isEqualToString:@"ssh -t user@host \"echo test\""] &&
-          [commands[1][@"command"] isEqualToString:@"cd Workspace\nls -al\n"], @"명령 작성 순서와 따옴표·여러 줄을 보존하고 YAML 주석을 해석합니다.");
-    CommandStore *store = [[CommandStore alloc] initWithURL:url];
+    check(commands.count == 2 && [commands[0].name isEqualToString:@"server:ssh"] &&
+          [commands[0].value isEqualToString:@"ssh -t user@host \"echo test\""] &&
+          [commands[1].value isEqualToString:@"cd Workspace\nls -al\n"], @"명령 작성 순서와 따옴표·여러 줄을 보존하고 YAML 주석을 해석합니다.");
+    ConfigStore *store = [[ConfigStore alloc] initWithURL:url];
     __block NSUInteger notifications = 0;
     store.didRefresh = ^{ check(NSThread.isMainThread, @"설정 갱신은 메인 스레드에 전달됩니다."); notifications++; };
     [store refresh]; [store refresh];
@@ -170,14 +171,14 @@ static void commandTests(void) {
     for (NSString *text in invalid) {
         [text writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:nil];
         error = nil;
-        check(![CommandStore commandsAtURL:url error:&error] && error, @"잘못된 형식·중복·비문자열·빈 명령·복수 문서를 거부합니다.");
+        check(![ConfigStore commandsAtURL:url error:&error] && error, @"잘못된 형식·중복·비문자열·빈 명령·복수 문서를 거부합니다.");
     }
     NSMutableString *deep = [NSMutableString stringWithString:@"commands: "];
     for (NSUInteger i = 0; i < 1100; i++) [deep appendString:@"["];
     for (NSUInteger i = 0; i < 1100; i++) [deep appendString:@"]"];
     [deep writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:nil];
     error = nil;
-    check(![CommandStore commandsAtURL:url error:&error] && error, @"과도한 YAML 중첩은 파서 오류로 반환합니다.");
+    check(![ConfigStore commandsAtURL:url error:&error] && error, @"과도한 YAML 중첩은 파서 오류로 반환합니다.");
     [store refresh]; waitForCommands(store);
     check(store.error && [store.commands isEqualToArray:commands], @"잘못된 설정은 오류를 알리고 마지막 정상 캐시를 유지합니다.");
     [@"commands: {}" writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:nil];
@@ -190,7 +191,7 @@ static void commandTests(void) {
     check(!store.error && store.commands.count == 0, @"파일 삭제는 캐시를 비웁니다.");
     [fm createDirectoryAtURL:url withIntermediateDirectories:NO attributes:nil error:nil];
     error = nil;
-    check(![CommandStore ensureConfigurationAtURL:url error:&error] && error, @"설정 경로가 폴더이면 생성 실패를 알립니다.");
+    check(![ConfigStore ensureConfigurationAtURL:url error:&error] && error, @"설정 경로가 폴더이면 생성 실패를 알립니다.");
     [fm removeItemAtURL:root error:nil];
 }
 static void websiteTests(void) {
@@ -199,17 +200,17 @@ static void websiteTests(void) {
     [fm createDirectoryAtURL:root withIntermediateDirectories:YES attributes:nil error:nil];
     NSURL *url = [root URLByAppendingPathComponent:@"config.yml"];
     NSError *error = nil;
-    check([CommandStore websitesAtURL:url error:&error].count == 0 && !error, @"없는 설정 파일은 웹사이트 없는 정상 상태입니다.");
+    check([ConfigStore websitesAtURL:url error:&error].count == 0 && !error, @"없는 설정 파일은 웹사이트 없는 정상 상태입니다.");
     [@"" writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    check([CommandStore websitesAtURL:url error:&error].count == 0 && !error, @"빈 설정 파일은 웹사이트 없는 정상 상태입니다.");
+    check([ConfigStore websitesAtURL:url error:&error].count == 0 && !error, @"빈 설정 파일은 웹사이트 없는 정상 상태입니다.");
     NSString *yaml = @"commands: {명령: pwd}\nwebsites:\n  'dagu:local': 'http://localhost:8480'\n  검색: 'https://example.com/search?q=hello&lang=ko#결과'\napp_icons: {}\n";
     [yaml writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    NSArray *websites = [CommandStore websitesAtURL:url error:&error];
+    NSArray *websites = [ConfigStore websitesAtURL:url error:&error];
     check(!error && [websites isEqualToArray:@[
-        @{@"name": @"dagu:local", @"url": @"http://localhost:8480"},
-        @{@"name": @"검색", @"url": @"https://example.com/search?q=hello&lang=ko#결과"}]],
+        [MLConfigEntry entryWithName:@"dagu:local" value:@"http://localhost:8480"],
+        [MLConfigEntry entryWithName:@"검색" value:@"https://example.com/search?q=hello&lang=ko#결과"]]],
         @"웹사이트 작성 순서와 이름·포트·쿼리·앵커를 보존합니다.");
-    CommandStore *store = [[CommandStore alloc] initWithURL:url];
+    ConfigStore *store = [[ConfigStore alloc] initWithURL:url];
     __block NSUInteger notifications = 0;
     store.didRefresh = ^{ check(NSThread.isMainThread, @"웹사이트 갱신은 메인 스레드에 전달됩니다."); notifications++; };
     [store refresh]; [store refresh];
@@ -223,7 +224,7 @@ static void websiteTests(void) {
     NSString *changed = [yaml stringByReplacingOccurrencesOfString:@"localhost:8480" withString:@"localhost:8481"];
     [changed writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:nil];
     [store refresh]; waitForCommands(store);
-    websites = [CommandStore websitesAtURL:url error:&error];
+    websites = [ConfigStore websitesAtURL:url error:&error];
     check([store.websites isEqualToArray:websites] && [store.commands isEqualToArray:commands] && notifications == 2,
         @"명령이 같아도 웹사이트 URL 변경을 알립니다.");
     NSArray *invalid = @[@"websites: [x]", @"websites: {x: 'https://example.com', x: 'https://example.org'}",
@@ -235,7 +236,7 @@ static void websiteTests(void) {
     for (NSString *text in invalid) {
         [[@"commands: {변경: ls}\n" stringByAppendingString:text] writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:nil];
         error = nil;
-        check(![CommandStore websitesAtURL:url error:&error] && error,
+        check(![ConfigStore websitesAtURL:url error:&error] && error,
             @"웹사이트의 잘못된 형식·중복·빈 값·호스트 없는 주소·HTTP 이외의 스킴을 거부합니다.");
     }
     [store refresh]; waitForCommands(store);
@@ -252,6 +253,41 @@ static void websiteTests(void) {
     [store refresh]; waitForCommands(store);
     check(!store.error && !store.websites.count && !store.commands.count, @"설정 파일 삭제는 웹사이트와 명령을 비웁니다.");
     [fm removeItemAtURL:root error:nil];
+}
+static void shortcutTests(void) {
+    NSURL *first = [NSURL fileURLWithPath:@"/tmp/프로젝트 하나" isDirectory:YES];
+    NSURL *second = [NSURL fileURLWithPath:@"/tmp/둘째" isDirectory:YES];
+    NSURL *apps = [NSURL fileURLWithPath:@"/System/Applications/Apps.app" isDirectory:YES];
+    NSArray *websites = @[[MLConfigEntry entryWithName:@"검색" value:@"https://example.com/search?q=hello"]];
+    NSArray *commands = @[[MLConfigEntry entryWithName:@"목록" value:@"cd Workspace\nls -al\n"]];
+    NSArray<MLShortcut *> *shortcuts = [MLShortcut shortcutsWithDirectories:@[first, second]
+        websites:websites commands:commands appsURL:apps];
+    check(shortcuts.count == 5, @"최근 폴더·웹사이트·명령·Apps를 하나의 목록으로 만듭니다.");
+    NSArray *kinds = @[@(MLShortcutKindDirectory), @(MLShortcutKindDirectory), @(MLShortcutKindWebsite),
+                       @(MLShortcutKindCommand), @(MLShortcutKindApps)];
+    NSArray *titles = @[@"프로젝트 하나", @"둘째", @"검색", @"목록", @"Apps…"];
+    for (NSUInteger i = 0; i < shortcuts.count; i++) {
+        check(shortcuts[i].kind == [kinds[i] integerValue] && [shortcuts[i].title isEqualToString:titles[i]],
+              @"하단 항목은 최근 폴더 → 웹사이트 → 명령 → Apps 순서와 표시 이름을 유지합니다.");
+    }
+    check([shortcuts[0].url isEqual:first] && [shortcuts[0].toolTip isEqualToString:first.path] && !shortcuts[0].command,
+          @"폴더 항목은 대상 URL과 전체 경로 툴팁을 가집니다.");
+    check([shortcuts[2].url.host isEqualToString:@"example.com"] &&
+          [shortcuts[2].toolTip isEqualToString:@"https://example.com/search?q=hello"], @"웹사이트 항목은 URL과 설정 원문 툴팁을 가집니다.");
+    check(!shortcuts[3].url && [shortcuts[3].command isEqualToString:@"cd Workspace\nls -al\n"] &&
+          [shortcuts[3].toolTip isEqualToString:shortcuts[3].command], @"명령 항목은 본문을 그대로 보존합니다.");
+    check([shortcuts[4].url isEqual:apps], @"Apps 항목은 시스템 앱 탐색기를 가리킵니다.");
+    check([shortcuts[0].accessibilityLabel containsString:@"Cursor"] && [shortcuts[2].accessibilityLabel containsString:@"브라우저"] &&
+          [shortcuts[3].accessibilityLabel containsString:@"명령 실행"], @"종류별 손쉬운 사용 설명을 제공합니다.");
+    NSArray *again = [MLShortcut shortcutsWithDirectories:@[first, second] websites:websites commands:commands appsURL:apps];
+    check([shortcuts isEqualToArray:again], @"내용이 같은 목록은 같다고 판단하여 화면을 다시 그리지 않습니다.");
+    NSArray *changed = [MLShortcut shortcutsWithDirectories:@[first, second]
+        websites:@[[MLConfigEntry entryWithName:@"검색" value:@"https://example.org/"]] commands:commands appsURL:apps];
+    check(![shortcuts isEqualToArray:changed], @"이름이 같아도 URL이 바뀌면 다른 목록입니다.");
+    NSArray *reordered = [MLShortcut shortcutsWithDirectories:@[second, first] websites:websites commands:commands appsURL:apps];
+    check(![shortcuts isEqualToArray:reordered], @"최근 순서가 바뀌면 다른 목록입니다.");
+    check([MLShortcut shortcutsWithDirectories:@[] websites:@[] commands:@[] appsURL:nil].count == 0,
+          @"Apps가 없는 시스템에서 입력이 비면 하단 항목을 만들지 않습니다.");
 }
 static void gestureTests(void) {
     for (int count = 4; count <= 5; count++) {
@@ -456,8 +492,8 @@ static void sleepLogTests(void) {
 }
 int main(void) {
     @autoreleasepool {
-        appIconTests(); commandTests(); websiteTests(); recentDirectoryTests(); gestureTests(); catalogTests(); protectedApplicationTests(); groupingTests(); sleepTests(); sleepLogTests();
-        puts("통과: YAML 웹사이트·명령 설정과 비동기 캐시, Cursor 최근 폴더와 비동기 캐시, 제스처 인식, Finder alias/폴더, Tag 그룹, 잠자기 방지 요청 및 로그 테스트");
+        appIconTests(); commandTests(); websiteTests(); shortcutTests(); recentDirectoryTests(); gestureTests(); catalogTests(); protectedApplicationTests(); groupingTests(); sleepTests(); sleepLogTests();
+        puts("통과: YAML 웹사이트·명령 설정과 비동기 캐시, 하단 항목 목록, Cursor 최근 폴더와 비동기 캐시, 제스처 인식, Finder alias/폴더, Tag 그룹, 잠자기 방지 요청 및 로그 테스트");
     }
     return 0;
 }

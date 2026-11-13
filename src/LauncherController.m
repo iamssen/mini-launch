@@ -4,7 +4,9 @@
 #import "LauncherAppearance.h"
 #import "RecentDirectories.h"
 #import "FolderIcon.h"
-#import "CommandStore.h"
+#import "ConfigStore.h"
+#import "LauncherShortcut.h"
+#import "ExternalApps.h"
 #import "TerminalCommand.h"
 #import <QuartzCore/QuartzCore.h>
 #import <CoreImage/CoreImage.h>
@@ -36,13 +38,12 @@ static const CGFloat GroupGap = 20;
 @property NSArray<NSArray<MLItem *> *> *groups;
 @property NSMutableArray<LauncherActionButton *> *buttons;
 @property RecentDirectories *recentDirectories;
-@property CommandStore *commandStore;
-@property NSArray<NSDictionary<NSString *, NSString *> *> *commands;
-@property NSArray<NSDictionary<NSString *, NSString *> *> *websites;
+@property ConfigStore *configStore;
+@property NSArray<MLShortcut *> *shortcuts;
 @property BOOL commandRunning;
-@property NSArray<NSURL *> *directoryURLs;
 @property NSURL *appsURL;
-@property FlippedView *directoryList;
+@property FlippedView *shortcutList;
+@property NSString *catalogError;
 @property BOOL entering;
 @property BOOL trackingMenu;
 @property NSTextField *titleLabel;
@@ -67,12 +68,10 @@ static const CGFloat GroupGap = 20;
 - (instancetype)initWithRoot:(NSURL *)root {
     if (!(self = [super init])) return nil;
     _root = root;
-    _directoryURLs = @[];
-    _commands = @[];
-    _websites = @[];
+    _shortcuts = @[];
     NSURL *appsURL = [NSURL fileURLWithPath:@"/System/Applications/Apps.app" isDirectory:YES];
     if ([NSWorkspace.sharedWorkspace isFilePackageAtPath:appsURL.path]) _appsURL = appsURL;
-    _commandStore = [[CommandStore alloc] initWithURL:[root URLByAppendingPathComponent:@"config.yml"]];
+    _configStore = [[ConfigStore alloc] initWithURL:[ConfigStore configurationURLInDirectory:root]];
     NSURL *database = [NSURL fileURLWithPath:[NSHomeDirectory() stringByAppendingPathComponent:
         @"Library/Application Support/Cursor/User/globalStorage/state.vscdb"]];
     _recentDirectories = [[RecentDirectories alloc] initWithDatabaseURL:database];
@@ -117,8 +116,8 @@ static const CGFloat GroupGap = 20;
     _grid = [FlippedView new];
     _scroll.documentView = _grid;
     [_backdrop.effect addSubview:_scroll];
-    _directoryList = [FlippedView new];
-    [_backdrop.effect addSubview:_directoryList];
+    _shortcutList = [FlippedView new];
+    [_backdrop.effect addSubview:_shortcutList];
     _statusLabel = [NSTextField labelWithString:@""];
     _statusLabel.font = [NSFont systemFontOfSize:11];
     _statusLabel.textColor = NSColor.whiteColor;
@@ -135,9 +134,9 @@ static const CGFloat GroupGap = 20;
         (void)e;
         if (!weakSelf.trackingMenu) [weakSelf hide];
     }];
-    _recentDirectories.didRefresh = ^{ [weakSelf applyRecentDirectories]; };
-    _commandStore.didRefresh = ^{ [weakSelf applyRecentDirectories]; };
-    [_commandStore refresh];
+    _recentDirectories.didRefresh = ^{ [weakSelf applyCachedShortcuts]; };
+    _configStore.didRefresh = ^{ [weakSelf applyCachedShortcuts]; };
+    [_configStore refresh];
     [_recentDirectories refresh];
     return self;
 }
@@ -195,13 +194,13 @@ static const CGFloat GroupGap = 20;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(duration * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             if (weakSelf.transitionGeneration != generation) return;
             weakSelf.entering = NO;
-            [weakSelf applyRecentDirectories];
+            [weakSelf applyCachedShortcuts];
         });
     } else {
         self.entering = NO;
     }
     [self.recentDirectories refresh];
-    [self.commandStore refresh];
+    [self.configStore refresh];
 }
 - (CGFloat)gridHeight {
     CGFloat height = 0;
@@ -209,16 +208,12 @@ static const CGFloat GroupGap = 20;
         height += ceil((double)group.count / self.columns) * CellHeight;
     return MAX(CellHeight, height + MAX(0, (NSInteger)self.groups.count - 1) * GroupGap);
 }
-- (NSArray<NSValue *> *)directoryFramesForWidth:(CGFloat)width {
+- (NSArray<NSValue *> *)shortcutFramesForWidth:(CGFloat)width {
     if (self.path.count != 1) return @[];
     NSMutableArray *frames = [NSMutableArray array];
     CGFloat x = 0, y = 0;
-    NSMutableArray<NSString *> *names = [NSMutableArray array];
-    for (NSURL *url in self.directoryURLs) [names addObject:url.lastPathComponent];
-    for (NSDictionary *website in self.websites) [names addObject:website[@"name"]];
-    for (NSDictionary *command in self.commands) [names addObject:command[@"name"]];
-    if (self.appsURL) [names addObject:@"Apps…"];
-    for (NSString *name in names) {
+    for (MLShortcut *shortcut in self.shortcuts) {
+        NSString *name = shortcut.title;
         CGFloat textWidth = [name sizeWithAttributes:@{NSFontAttributeName: [NSFont systemFontOfSize:13]}].width;
         CGFloat itemWidth = MIN(width, ceil(textWidth) + 36);
         if (x > 0 && x + itemWidth > width) { x = 0; y += 32; }
@@ -237,21 +232,27 @@ static const CGFloat GroupGap = 20;
     }
     return frames;
 }
-- (CGFloat)directoryHeightForWidth:(CGFloat)width {
-    NSArray<NSValue *> *frames = [self directoryFramesForWidth:width];
+- (CGFloat)shortcutHeightForWidth:(CGFloat)width {
+    NSArray<NSValue *> *frames = [self shortcutFramesForWidth:width];
     return frames.count ? NSMaxY(frames.lastObject.rectValue) + 16 : 0;
 }
-- (void)applyRecentDirectories {
+- (NSArray<MLShortcut *> *)cachedShortcuts {
+    return [MLShortcut shortcutsWithDirectories:self.recentDirectories.directories
+        websites:self.configStore.websites commands:self.configStore.commands appsURL:self.appsURL];
+}
+// 폴더 읽기 오류를 설정 오류보다 먼저 보여 주며, 비동기 캐시 갱신이 이를 지우지 않습니다.
+- (void)refreshStatus {
+    NSString *message = self.catalogError ?: self.configStore.error.localizedDescription;
+    if (message) [self showError:message];
+    else self.statusLabel.hidden = YES;
+}
+- (void)applyCachedShortcuts {
     // 조작 중에는 항목 이동을 피하고 다음 열기에서 최신 캐시를 사용합니다.
     if (!self.visible || self.entering || self.trackingMenu || self.selected >= 0 || self.path.count != 1) return;
-    if (self.commandStore.error) [self showError:self.commandStore.error.localizedDescription];
-    else self.statusLabel.hidden = YES;
-    if ([self.directoryURLs isEqualToArray:self.recentDirectories.directories] &&
-        [self.websites isEqualToArray:self.commandStore.websites] &&
-        [self.commands isEqualToArray:self.commandStore.commands]) return;
-    self.directoryURLs = self.recentDirectories.directories;
-    self.websites = self.commandStore.websites;
-    self.commands = self.commandStore.commands;
+    [self refreshStatus];
+    NSArray<MLShortcut *> *shortcuts = [self cachedShortcuts];
+    if ([self.shortcuts isEqualToArray:shortcuts]) return;
+    self.shortcuts = shortcuts;
     [self layout];
     [self renderItems];
 }
@@ -259,14 +260,14 @@ static const CGFloat GroupGap = 20;
     NSRect area = self.availableFrame;
     NSInteger capacity = MAX(1, MIN(6, (NSInteger)((NSWidth(area) - SideInset * 2) / CellWidth)));
     self.columns = MAX(1, MIN(capacity, (NSInteger)self.items.count));
-    if (!self.items.count || (self.path.count == 1 && (self.directoryURLs.count || self.websites.count || self.commands.count || self.appsURL)))
+    if (!self.items.count || (self.path.count == 1 && self.shortcuts.count))
         self.columns = MAX(self.columns, MIN(3, capacity));
     CGFloat width = MIN(NSWidth(area), self.columns * CellWidth + SideInset * 2);
     BOOL tail = self.dockPresentation && self.bottomDock;
     CGFloat bottom = tail ? 12 : 0;
     CGFloat topInset = self.path.count > 1 ? 44 : 16;
-    CGFloat directoryHeight = [self directoryHeightForWidth:width - SideInset * 2];
-    CGFloat height = MIN(NSHeight(area), topInset + [self gridHeight] + directoryHeight + 10 + bottom);
+    CGFloat shortcutHeight = [self shortcutHeightForWidth:width - SideInset * 2];
+    CGFloat height = MIN(NSHeight(area), topInset + [self gridHeight] + shortcutHeight + 10 + bottom);
     NSRect frame = NSMakeRect(NSMidX(area) - width / 2, NSMidY(area) - height / 2, width, height);
     if (self.dockPresentation && !NSIsEmptyRect(self.dockIcon)) {
         if (tail) {
@@ -291,9 +292,9 @@ static const CGFloat GroupGap = 20;
     [self.backdrop updateShape];
     self.titleLabel.frame = NSMakeRect(52, height - 30, width - 104, 20);
     self.back.frame = NSMakeRect(17, height - 35, 28, 28);
-    self.directoryList.frame = NSMakeRect(SideInset, bottom + 10, width - SideInset * 2, directoryHeight);
-    self.scroll.frame = NSMakeRect(SideInset, bottom + 10 + directoryHeight, width - SideInset * 2,
-        MAX(0, height - topInset - 10 - bottom - directoryHeight));
+    self.shortcutList.frame = NSMakeRect(SideInset, bottom + 10, width - SideInset * 2, shortcutHeight);
+    self.scroll.frame = NSMakeRect(SideInset, bottom + 10 + shortcutHeight, width - SideInset * 2,
+        MAX(0, height - topInset - 10 - bottom - shortcutHeight));
     self.statusLabel.frame = NSMakeRect(24, bottom + 2, width - 48, 16);
 }
 // 메뉴 막대 또는 Dock 위치를 확대·축소의 기준으로 삼습니다.
@@ -424,11 +425,10 @@ static const CGFloat GroupGap = 20;
     self.statusLabel.hidden = NO;
 }
 - (void)reload {
-    self.directoryURLs = self.recentDirectories.directories;
-    self.websites = self.commandStore.websites;
-    self.commands = self.commandStore.commands;
+    self.shortcuts = [self cachedShortcuts];
     NSError *error = nil;
     NSArray *catalog = [AppCatalog itemsAtURL:self.path.lastObject error:&error];
+    self.catalogError = error ? [NSString stringWithFormat:@"폴더를 읽을 수 없습니다: %@", error.localizedDescription] : nil;
     self.groups = [AppCatalog groupsForItems:catalog];
     NSMutableArray *flattened = [NSMutableArray array];
     for (NSArray *group in self.groups) [flattened addObjectsFromArray:group];
@@ -436,23 +436,34 @@ static const CGFloat GroupGap = 20;
     self.titleLabel.hidden = self.path.count == 1;
     self.titleLabel.stringValue = self.path.count == 1 ? @"" : self.path.lastObject.lastPathComponent;
     self.back.hidden = self.path.count <= 1;
-    self.statusLabel.hidden = YES;
     self.selected = -1;
     [self layout];
     [self renderItems];
-    if (error) [self showError:[NSString stringWithFormat:@"폴더를 읽을 수 없습니다: %@", error.localizedDescription]];
-    else if (self.commandStore.error) [self showError:self.commandStore.error.localizedDescription];
+    [self refreshStatus];
 }
 - (void)renderItems {
     for (NSView *view in self.grid.subviews.copy) [view removeFromSuperview];
-    for (NSView *view in self.directoryList.subviews.copy) [view removeFromSuperview];
+    for (NSView *view in self.shortcutList.subviews.copy) [view removeFromSuperview];
     self.buttons = [NSMutableArray array];
+    [self renderGrid];
+    [self renderShortcuts];
+    [self.grid scrollPoint:NSZeroPoint];
+}
+// 버튼의 tag는 방향키 선택에 쓰는 전체 버튼 순서이고, 실행 대상은 representedEntry입니다.
+- (void)addButton:(LauncherActionButton *)button entry:(id)entry toView:(NSView *)view {
+    button.representedEntry = entry;
+    button.target = self;
+    button.action = @selector(choose:);
+    button.tag = (NSInteger)self.buttons.count;
+    [view addSubview:button];
+    [self.buttons addObject:button];
+}
+- (void)renderGrid {
     CGFloat width = self.scroll.contentSize.width;
     CGFloat cell = width / self.columns;
     CGFloat height = MAX(self.scroll.contentSize.height, [self gridHeight]);
     self.grid.frame = NSMakeRect(0, 0, width, height);
     CGFloat groupY = 0;
-    NSInteger index = 0;
     for (NSArray<MLItem *> *group in self.groups) {
         if (groupY > 0) {
             NSBox *separator = [[NSBox alloc] initWithFrame:NSMakeRect(8, groupY + GroupGap / 2, width - 16, 1)];
@@ -461,26 +472,22 @@ static const CGFloat GroupGap = 20;
             groupY += GroupGap;
         }
         for (NSUInteger idx = 0; idx < group.count; idx++) {
-        MLItem *item = group[idx];
-        LauncherIconButton *button = [[LauncherIconButton alloc] initWithFrame:NSMakeRect(
-            (idx % self.columns) * cell + 3, groupY + (idx / self.columns) * CellHeight, cell - 6, 122)];
-        button.title = item.name;
-        button.image = [NSWorkspace.sharedWorkspace iconForFile:(item.targetURL ?: item.sourceURL).path];
-        __weak LauncherIconButton *weakButton = button;
-        MLLoadFolderIcon(item.targetURL ?: item.sourceURL, 96, self.panel.backingScaleFactor, ^(NSImage *image) {
-            LauncherIconButton *currentButton = weakButton;
-            currentButton.image = image;
-            currentButton.needsDisplay = YES;
-        });
-        button.target = self;
-        button.action = @selector(choose:);
-        button.menu = [self menuForURL:item.targetURL directory:item.folder valid:!item.problem];
-        button.tag = index++;
-        button.toolTip = item.problem ?: item.targetURL.path;
-        button.accessibilityLabel = item.name;
-        if (item.problem) button.alphaValue = 0.45;
-        [self.grid addSubview:button];
-        [self.buttons addObject:button];
+            MLItem *item = group[idx];
+            LauncherIconButton *button = [[LauncherIconButton alloc] initWithFrame:NSMakeRect(
+                (idx % self.columns) * cell + 3, groupY + (idx / self.columns) * CellHeight, cell - 6, 122)];
+            button.title = item.name;
+            button.image = [NSWorkspace.sharedWorkspace iconForFile:(item.targetURL ?: item.sourceURL).path];
+            __weak LauncherIconButton *weakButton = button;
+            MLLoadFolderIcon(item.targetURL ?: item.sourceURL, 96, self.panel.backingScaleFactor, ^(NSImage *image) {
+                LauncherIconButton *currentButton = weakButton;
+                currentButton.image = image;
+                currentButton.needsDisplay = YES;
+            });
+            button.menu = [self menuForURL:item.targetURL directory:item.folder valid:!item.problem];
+            button.toolTip = item.problem ?: item.targetURL.path;
+            button.accessibilityLabel = item.name;
+            if (item.problem) button.alphaValue = 0.45;
+            [self addButton:button entry:item toView:self.grid];
         }
         groupY += ceil((double)group.count / self.columns) * CellHeight;
     }
@@ -491,118 +498,113 @@ static const CGFloat GroupGap = 20;
         empty.frame = NSMakeRect(16, 34, width - 32, 64);
         [self.grid addSubview:empty];
     }
-    NSArray<NSValue *> *frames = [self directoryFramesForWidth:NSWidth(self.directoryList.bounds)];
+}
+- (void)renderShortcuts {
+    // 하위 폴더에서는 배치 결과가 비어 하단 항목을 그리지 않습니다.
+    NSArray<NSValue *> *frames = [self shortcutFramesForWidth:NSWidth(self.shortcutList.bounds)];
     if (frames.count) {
-        NSBox *separator = [[NSBox alloc] initWithFrame:NSMakeRect(8, 4, width - 16, 1)];
+        NSBox *separator = [[NSBox alloc] initWithFrame:NSMakeRect(8, 4, NSWidth(self.shortcutList.bounds) - 16, 1)];
         separator.boxType = NSBoxSeparator;
-        [self.directoryList addSubview:separator];
+        [self.shortcutList addSubview:separator];
     }
-    NSUInteger commandStart = self.directoryURLs.count + self.websites.count;
-    NSUInteger appsIndex = commandStart + self.commands.count;
-    NSString *safariPath = self.websites.count
-        ? [NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:@"com.apple.Safari"].path : nil;
+    NSString *safariPath = nil;
     for (NSUInteger i = 0; i < frames.count; i++) {
-        BOOL isDirectory = i < self.directoryURLs.count;
-        BOOL isWebsite = !isDirectory && i < commandStart;
-        BOOL isCommand = i >= commandStart && i < appsIndex;
-        BOOL isApps = i == appsIndex;
-        NSDictionary *entry = isWebsite ? self.websites[i - self.directoryURLs.count]
-            : (isCommand ? self.commands[i - commandStart] : nil);
-        NSURL *url = isApps ? self.appsURL : (isDirectory ? self.directoryURLs[i] : nil);
-        NSRect frame = NSOffsetRect(frames[i].rectValue, 0, 16);
-        LauncherDirectoryButton *button = [[LauncherDirectoryButton alloc] initWithFrame:frame];
+        MLShortcut *shortcut = self.shortcuts[i];
+        BOOL isDirectory = shortcut.kind == MLShortcutKindDirectory;
+        LauncherDirectoryButton *button = [[LauncherDirectoryButton alloc] initWithFrame:NSOffsetRect(frames[i].rectValue, 0, 16)];
         button.bordered = NO;
         button.focusRingType = NSFocusRingTypeNone;
-        button.title = isApps ? @"Apps…" : (isDirectory ? url.lastPathComponent : entry[@"name"]);
+        button.title = shortcut.title;
         // 정사각형 앱 아이콘의 보이는 높이를 가로로 긴 폴더 아이콘에 맞춥니다.
         button.iconPointSize = isDirectory ? 16 : 15;
         button.iconOffsetY = isDirectory ? 0 : 1;
-        NSString *iconPath = isWebsite ? (safariPath ?: @"/Applications/Safari.app")
-            : (isCommand ? @"/System/Applications/Utilities/Terminal.app" : url.path);
+        NSString *iconPath = shortcut.url.path;
+        if (shortcut.kind == MLShortcutKindCommand) iconPath = @"/System/Applications/Utilities/Terminal.app";
+        if (shortcut.kind == MLShortcutKindWebsite) {
+            // 웹사이트가 여러 개여도 Safari 위치는 한 번만 조회합니다.
+            if (!safariPath) safariPath = [NSWorkspace.sharedWorkspace
+                URLForApplicationWithBundleIdentifier:MLSafariBundleIdentifier].path ?: @"/Applications/Safari.app";
+            iconPath = safariPath;
+        }
         button.image = [NSWorkspace.sharedWorkspace iconForFile:iconPath];
         __weak LauncherDirectoryButton *weakButton = button;
-        if (isDirectory) MLLoadFolderIcon(url, 16, self.panel.backingScaleFactor, ^(NSImage *image) {
+        if (isDirectory) MLLoadFolderIcon(shortcut.url, 16, self.panel.backingScaleFactor, ^(NSImage *image) {
             LauncherDirectoryButton *currentButton = weakButton;
             currentButton.image = image;
             currentButton.needsDisplay = YES;
         });
-        button.toolTip = isApps ? @"모든 앱 탐색" : (isDirectory ? url.path : entry[isWebsite ? @"url" : @"command"]);
-        button.accessibilityLabel = isApps ? @"Apps에서 모든 앱 탐색"
-            : (isDirectory ? [NSString stringWithFormat:@"Cursor로 열기: %@", url.lastPathComponent]
-            : [NSString stringWithFormat:isWebsite ? @"기본 브라우저로 열기: %@" : @"명령 실행: %@", entry[@"name"]]);
-        button.target = self;
-        button.action = @selector(choose:);
-        button.tag = self.buttons.count;
-        if (isDirectory) button.menu = [self menuForURL:url directory:YES valid:YES];
-        [self.directoryList addSubview:button];
-        [self.buttons addObject:button];
+        button.toolTip = shortcut.toolTip;
+        button.accessibilityLabel = shortcut.accessibilityLabel;
+        if (isDirectory) button.menu = [self menuForURL:shortcut.url directory:YES valid:YES];
+        [self addButton:button entry:shortcut toView:self.shortcutList];
     }
-    [self.grid scrollPoint:NSZeroPoint];
 }
 - (void)updateSelection {
     [self.buttons enumerateObjectsUsingBlock:^(LauncherActionButton *button, NSUInteger idx, BOOL *stop) {
         (void)stop;
         button.selected = (NSInteger)idx == self.selected;
     }];
-    if (self.selected >= 0 && self.selected < (NSInteger)self.items.count)
-        [self.grid scrollRectToVisible:self.buttons[self.selected].frame];
+    if (self.selected < 0) return;
+    LauncherActionButton *button = self.buttons[self.selected];
+    if (button.superview == self.grid) [self.grid scrollRectToVisible:button.frame];
 }
 - (void)choose:(NSButton *)sender { self.selected = sender.tag; [self activateSelection]; }
 - (void)activateSelection {
     if (self.selected < 0 || self.selected >= (NSInteger)self.buttons.count) return;
-    NSUInteger websiteStart = self.items.count + self.directoryURLs.count;
-    NSUInteger commandStart = websiteStart + self.websites.count;
-    if (self.appsURL && self.selected == (NSInteger)(commandStart + self.commands.count)) {
-        [self hide];
-        [NSWorkspace.sharedWorkspace openApplicationAtURL:self.appsURL
-            configuration:[NSWorkspaceOpenConfiguration configuration]
-            completionHandler:^(NSRunningApplication *app, NSError *error) {
-                (void)app;
-                if (!error) return;
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    NSAlert *alert = [NSAlert new];
-                    alert.messageText = @"Apps를 열지 못했습니다.";
-                    alert.informativeText = error.localizedDescription;
-                    [alert runModal];
-                });
-            }];
-        return;
-    }
-    if (self.selected >= (NSInteger)commandStart) {
-        if (self.commandRunning) return;
-        self.commandRunning = YES;
-        NSString *command = self.commands[self.selected - commandStart][@"command"];
-        __weak typeof(self) weakSelf = self;
-        [TerminalCommand run:command completion:^(NSString *error) {
-            weakSelf.commandRunning = NO;
-            if (error) {
-                // 권한 창 등으로 런처가 닫혀도 실행 실패는 별도 안내합니다.
-                NSAlert *alert = [NSAlert new];
-                alert.messageText = @"명령을 실행하지 못했습니다.";
-                alert.informativeText = error;
-                [alert runModal];
-            } else [weakSelf hide];
-        }];
-        return;
-    }
-    if (self.selected >= (NSInteger)websiteStart) {
-        NSURL *url = [NSURL URLWithString:self.websites[self.selected - websiteStart][@"url"]];
-        if ([NSWorkspace.sharedWorkspace openURL:url]) [self hide];
-        else { [self showError:@"웹사이트를 열지 못했습니다. 기본 브라우저 설정을 확인해 주세요."]; NSBeep(); }
-        return;
-    }
-    if (self.selected >= (NSInteger)self.items.count) {
-        NSURL *url = self.directoryURLs[self.selected - self.items.count];
-        [self openURL:url withApplicationIdentifier:@"com.todesktop.230313mzl4w4u92"];
-        return;
-    }
-    MLItem *item = self.items[self.selected];
+    id entry = self.buttons[self.selected].representedEntry;
+    if ([entry isKindOfClass:MLShortcut.class]) [self activateShortcut:entry];
+    else [self activateItem:entry];
+}
+- (void)activateItem:(MLItem *)item {
     if (item.problem) { [self showError:item.problem]; NSBeep(); return; }
     if (item.folder) {
         [self.path addObject:item.targetURL]; [self reload]; return;
     }
     if ([NSWorkspace.sharedWorkspace openURL:item.targetURL]) [self hide];
     else { [self showError:@"앱을 열지 못했습니다. Finder에서 대상을 확인해 주세요."]; NSBeep(); }
+}
+- (void)activateShortcut:(MLShortcut *)shortcut {
+    switch (shortcut.kind) {
+        case MLShortcutKindDirectory:
+            [self openURL:shortcut.url withApplicationIdentifier:MLCursorBundleIdentifier];
+            break;
+        case MLShortcutKindWebsite:
+            if (shortcut.url && [NSWorkspace.sharedWorkspace openURL:shortcut.url]) [self hide];
+            else { [self showError:@"웹사이트를 열지 못했습니다. 기본 브라우저 설정을 확인해 주세요."]; NSBeep(); }
+            break;
+        case MLShortcutKindCommand: [self runCommand:shortcut.command]; break;
+        case MLShortcutKindApps: [self openApps]; break;
+    }
+}
+- (void)openApps {
+    [self hide];
+    [NSWorkspace.sharedWorkspace openApplicationAtURL:self.appsURL
+        configuration:[NSWorkspaceOpenConfiguration configuration]
+        completionHandler:^(NSRunningApplication *app, NSError *error) {
+            (void)app;
+            if (!error) return;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                NSAlert *alert = [NSAlert new];
+                alert.messageText = @"Apps를 열지 못했습니다.";
+                alert.informativeText = error.localizedDescription;
+                [alert runModal];
+            });
+        }];
+}
+- (void)runCommand:(NSString *)command {
+    if (self.commandRunning) return;
+    self.commandRunning = YES;
+    __weak typeof(self) weakSelf = self;
+    [TerminalCommand run:command completion:^(NSString *error) {
+        weakSelf.commandRunning = NO;
+        if (error) {
+            // 권한 창 등으로 런처가 닫혀도 실행 실패는 별도 안내합니다.
+            NSAlert *alert = [NSAlert new];
+            alert.messageText = @"명령을 실행하지 못했습니다.";
+            alert.informativeText = error;
+            [alert runModal];
+        } else [weakSelf hide];
+    }];
 }
 - (NSRect)navigationRectForButton:(NSView *)button {
     // 앱 Grid의 스크롤 위치에 관계없이 논리적인 행 순서로 탐색합니다.
@@ -623,7 +625,7 @@ static const CGFloat GroupGap = 20;
         open.enabled = valid && url != nil;
     }
     if (!directory && [AppCatalog isProtectedApplicationAtURL:url]) return menu;
-    NSString *identifier = directory ? @"com.googlecode.iterm2" : @"net.freemacsoft.AppCleaner";
+    NSString *identifier = directory ? MLITermBundleIdentifier : MLAppCleanerBundleIdentifier;
     NSMenuItem *external = [menu addItemWithTitle:directory ? @"Open in iTerm" : @"Uninstall with AppCleaner…"
         action:@selector(openExternalItem:) keyEquivalent:@""];
     external.target = self;
@@ -646,17 +648,17 @@ static const CGFloat GroupGap = 20;
     self.trackingMenu = NO;
     // 메뉴 닫힘 뒤의 실행 액션이 먼저 처리되도록 다음 메인 큐 순서로 미룹니다.
     __weak typeof(self) weakSelf = self;
-    dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf applyRecentDirectories]; });
+    dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf applyCachedShortcuts]; });
 }
 - (void)revealItem:(NSMenuItem *)sender {
     [self hide];
     [NSWorkspace.sharedWorkspace activateFileViewerSelectingURLs:@[sender.representedObject]];
 }
 - (void)openFolder:(NSMenuItem *)sender {
-    [self openURL:sender.representedObject withApplicationIdentifier:@"com.apple.finder"];
+    [self openURL:sender.representedObject withApplicationIdentifier:MLFinderBundleIdentifier];
 }
 - (void)openExternalItem:(NSMenuItem *)sender {
-    if ([sender.representedObject[@"application"] isEqualToString:@"net.freemacsoft.AppCleaner"] &&
+    if ([sender.representedObject[@"application"] isEqualToString:MLAppCleanerBundleIdentifier] &&
         [AppCatalog isProtectedApplicationAtURL:sender.representedObject[@"url"]]) return;
     [self openURL:sender.representedObject[@"url"] withApplicationIdentifier:sender.representedObject[@"application"]];
 }
@@ -684,7 +686,7 @@ static const CGFloat GroupGap = 20;
     if (command && [event.charactersIgnoringModifiers.lowercaseString isEqualToString:@"r"]) {
         [self reload];
         [self.recentDirectories refresh];
-        [self.commandStore refresh];
+        [self.configStore refresh];
         return YES;
     }
     if (command) return NO;
