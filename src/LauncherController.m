@@ -560,8 +560,26 @@ static const CGFloat GroupGap = 20;
     if (item.folder) {
         [self.path addObject:item.targetURL]; [self reload]; return;
     }
-    if ([NSWorkspace.sharedWorkspace openURL:item.targetURL]) [self hide];
-    else { [self showError:@"앱을 열지 못했습니다. Finder에서 대상을 확인해 주세요."]; NSBeep(); }
+    NSNumber *application = nil;
+    [item.targetURL getResourceValue:&application forKey:NSURLIsApplicationKey error:nil];
+    if (!application.boolValue) {
+        if ([NSWorkspace.sharedWorkspace openURL:item.targetURL]) [self hide];
+        else { [self showError:@"앱을 열지 못했습니다. Finder에서 대상을 확인해 주세요."]; NSBeep(); }
+        return;
+    }
+    // openURL:로 앱을 열면 macOS가 대상 앱 번들 수정 여부를 검사해 '앱 관리' 차단 알림을 띄웁니다.
+    // openApplicationAtURL:은 이 검사를 일으키지 않습니다(2026-11-14 Nibbles.app으로 실기 확인).
+    __weak typeof(self) weakSelf = self;
+    [NSWorkspace.sharedWorkspace openApplicationAtURL:item.targetURL
+        configuration:[NSWorkspaceOpenConfiguration configuration]
+        completionHandler:^(NSRunningApplication *app, NSError *error) {
+            (void)app;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (!error) { [weakSelf hide]; return; }
+                [weakSelf showError:[NSString stringWithFormat:@"앱을 열지 못했습니다: %@", error.localizedDescription]];
+                NSBeep();
+            });
+        }];
 }
 - (void)activateShortcut:(MLShortcut *)shortcut {
     switch (shortcut.kind) {
