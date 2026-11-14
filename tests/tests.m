@@ -136,7 +136,7 @@ static void commandTests(void) {
     check([ConfigStore ensureConfigurationAtURL:url error:&error] && !error, @"메뉴에서 없는 설정 파일을 생성합니다.");
     NSString *initial = [NSString stringWithContentsOfURL:url encoding:NSUTF8StringEncoding error:nil];
     check([initial containsString:@"websites: {}\n"] && [initial containsString:@"commands: {}\n"] && [initial containsString:@"# 한 줄 명령 예시:"] &&
-        [initial containsString:@"# 여러 줄 명령"], @"기본 설정과 한국어 주석 안내를 포함합니다.");
+        [initial containsString:@"# 여러 줄 명령"] && [initial containsString:@": exec ssh"], @"기본 설정과 한국어 주석 안내를 포함합니다.");
     check([ConfigStore commandsAtURL:url error:&error].count == 0 && !error, @"생성한 기본 설정은 유효한 빈 명령 목록입니다.");
     check([ConfigStore websitesAtURL:url error:&error].count == 0 && !error, @"생성한 기본 설정은 유효한 빈 웹사이트 목록입니다.");
     [@"" writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:nil];
